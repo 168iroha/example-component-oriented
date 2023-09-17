@@ -1,13 +1,20 @@
 
 /**
+ * @typedef {{
+ * 		label?: number | string | symbol | undefined;
+ * 		caller: Function;
+ * }} CallerType 状態変数における呼び出し元についての型
+ */
+
+/**
  * 状態変数
  * @template T
  */
 class State {
 	/** @type { T } 状態変数の本体 */
 	#value;
-	/** @type { Set<Function> } 呼び出し元のハンドラのリスト */
-	#callerList;
+	/** @type { Set<CallerType> } 呼び出し元のハンドラのリスト */
+	#callerList = new Set();
 	/** @type { Context } 状態変数の扱っているコンテキスト */
 	#ctx;
 	/** @type { ((val: State<T>) => unknown) | undefined } 参照の追加時に発火されるイベントハンドラ */
@@ -20,7 +27,6 @@ class State {
 	 */
 	constructor(value, ctx) {
 		this.#value = value;
-		this.#callerList = new Set();
 		this.#ctx = ctx;
 	}
 
@@ -36,7 +42,7 @@ class State {
 	set value(value) {
 		if (value !== this.#value) {
 			this.#value = value;
-			this.update();
+			this.#ctx.updateState(this.#callerList);
 		}
 	}
 
@@ -53,16 +59,16 @@ class State {
 	get ctx() { return this.#ctx; }
 
 	/**
-	 * 全ての呼び出し元を呼びだす
-	 */
-	update() { this.#callerList.forEach(val => val()); }
-
-	/**
 	 * 明示的に呼び出し元情報を削除する
-	 * @param { Function } caller 呼び出し元の関数
+	 * @param { CallerType } caller 呼び出し元の関数
 	 * @returns 
 	 */
 	delete(caller) { return this.#callerList.delete(caller); }
+
+	/**
+	 * 状態変数の参照カウントを得る
+	 */
+	get count() { return this.#callerList.size; }
 }
 
 /**
@@ -171,28 +177,121 @@ class Computed {
  * 状態を持ったノード
  */
 class StateNode {
-	/** @type { { caller: Function; states: State<unknown>[] }[] } 呼び出し元のリスト */
+	/** @type { Context } ノードを扱っているコンテキスト */
+	#ctx;
+	/** @type { { caller: CallerType; states: State<unknown>[] }[] } 呼び出し元のリスト(これの破棄により親との関連付けが破棄される) */
 	callerList;
 
 	/**
 	 * コンストラクタ
-	 * @param { { caller: Function; states: State<unknown>[] }[] } callerList 呼び出し元のリスト
+	 * @param { Context } ctx ノードを扱っているコンテキスト
+	 * @param { { caller: CallerType; states: State<unknown>[] }[] } callerList 呼び出し元のリスト
 	 */
-	constructor(callerList) {
+	constructor(ctx, callerList) {
+		this.#ctx = ctx;
 		this.callerList = callerList;
 	}
 
+	get ctx() { return this.#ctx; }
+
 	/**
 	 * DOMノードの取得
-	 * @returns { HTMLElement | Text }
+	 * @returns { HTMLElement | Text | undefined }
 	 */
 	get element() { throw new Error('not implemented.'); }
+
+	/**
+	 * このノードを代表するノードの取得
+	 * @returns { StateNode | undefined }
+	 */
+	get node() { return this; }
+
+	/**
+	 * 子要素となるノードの取得
+	 * @returns { StateNode[] }
+	 */
+	get children() { return []; }
 
 	/**
 	 * ノードの削除
 	 */
 	remove() {
 		this.callerList.forEach(caller => caller.states.forEach(s => s.delete(caller.caller)));
+	}
+
+	/**
+	 * 子要素を構築する(孫要素以降は構築しない)
+	 * @returns { StateNode[] }
+	 */
+	buildChild() { throw new Error('not implemented.'); }
+
+	/**
+	 * 自要素を構築する(子要素は構築しない)
+	 */
+	buildCurrent() { throw new Error('not implemented.'); }
+
+	/**
+	 * 子孫要素を構築する
+	 */
+	build() {
+		this.#ctx.lazy(() => {
+			/** @type { StateNode[] } コンポーネントについての幅優先探索に関するキュー */
+			const queueComponent = [this];
+			this.buildCurrent();
+			// コンポーネント生成に関するループ
+			while (queueComponent.length > 0) {
+				const component = queueComponent.shift();
+				/** ノードについての幅優先探索に関するキュー */
+				const queueNode = component.buildChild();
+				/** @type { StateNode[] } コンポーネント内のスコープにあるコンポーネントについての幅優先探索に関するキュー */
+				const queueLocalComponent = [];
+				console.log('start', component);
+				//  コンポーネント内のノード生成に関するループ
+				while (queueNode.length > 0) {
+					const node = queueNode.shift();
+					console.log(node);
+					if (node.node instanceof StateComponent) {
+						queueLocalComponent.push(node);
+					}
+					else {
+						node.buildCurrent();
+						queueNode.push(...node.buildChild());
+					}
+				}
+				queueComponent.push(...queueLocalComponent);
+				// コンポーネント内のコンポーネントの代表するDOMノードの生成
+				queueLocalComponent.forEach(c => c.buildCurrent());
+
+				// DOMノードの親子関係の決定
+				queueNode.push(component);
+				console.log('start2');
+				while (queueNode.length > 0) {
+					const node = queueNode.shift();
+					console.log(node);
+					for (const child of node.children) {
+						console.log('child', child);
+						if (child instanceof StateNode) {
+							node.element.appendChild(child.element);
+							if (!(child.node instanceof StateComponent)) {
+								queueNode.push(child);
+							}
+						}
+						else {
+							node.element.appendChild(child);
+						}
+					}
+				}
+			}
+		})();
+		return this;
+	}
+
+	/**
+	 * DOMノードにマウントする
+	 * @param { HTMLElement | Text } element
+	 */
+	mount(element) {
+		// TODO
 	}
 }
 
@@ -205,11 +304,12 @@ class StateTextNode extends StateNode {
 
 	/**
 	 * コンストラクタ
-	 * @param { HTMLElement | Text } element DOMノード
-	 * @param { { caller: Function; states: State<unknown>[] }[] } callerList 呼び出し元のリスト
+	 * @param { Context } ctx ノードを扱っているコンテキスト
+	 * @param { Text } element DOMノード
+	 * @param { { caller: CallerType; states: State<unknown>[] }[] } callerList 呼び出し元のリスト
 	 */
-	constructor(element, callerList) {
-		super(callerList);
+	constructor(ctx, element, callerList) {
+		super(ctx, callerList);
 		this.#element = element;
 	}
 
@@ -226,29 +326,35 @@ class StateTextNode extends StateNode {
 		super.remove();
 		this.#element.remove();
 	}
+
+	/**
+	 * 子要素を構築する(孫要素以降は構築しない)
+	 * @returns { [] }
+	 */
+	buildChild() { return []; }
+
+	/**
+	 * 自要素を構築する(子要素は構築しない)
+	 */
+	buildCurrent() {}
 }
 
 /**
- * 状態を持ったDOMノード
- * @template { string } K
+ * 状態を持ったHTMLElementノード
  */
-class StateDomNode extends StateNode {
-	/** @type { CreatedElementType<K> } DOMノード */
+class StateHTMLElement extends StateNode {
+	/** @type { HTMLElement } DOMノード */
 	#element;
-	/** @type { (HTMLElement | Text | StateNode)[] } 子要素 */
-	#children = [];
-	/** @type { { caller: Function; states: State<unknown>[] }[] } 子要素に対する呼び出し元のリスト */
-	#childrenCallerList;
 
 	/**
 	 * コンストラクタ
-	 * @param { CreatedElementType<K> } element DOMノード
-	 * @param { { caller: Function; states: State<unknown>[] }[] } callerList 呼び出し元のリスト
+	 * @param { Context } ctx ノードを扱っているコンテキスト
+	 * @param { HTMLElement } element DOMノード
+	 * @param { { caller: CallerType; states: State<unknown>[] }[] } callerList 呼び出し元のリスト
 	 */
-	constructor(element, callerList) {
-		super(callerList);
+	constructor(ctx, element, callerList) {
+		super(ctx, callerList);
 		this.#element = element;
-		this.#childrenCallerList = [];
 	}
 
 	/**
@@ -262,44 +368,131 @@ class StateDomNode extends StateNode {
 	 */
 	remove() {
 		super.remove();
-		this.#childrenCallerList.forEach(caller => caller.states.forEach(s => s.delete(caller.caller)));
 		this.#element.remove();
 	}
 
 	/**
-	 * 子要素を引数のノードで置き換える
-	 * @param  { (HTMLElement | Text | StateNode)[] } nodes 
+	 * 子要素を構築する(孫要素以降は構築しない)
+	 * @returns { [] }
 	 */
-	replace(nodes) {
-		/** 削除対象の差分 */
-		const removeList = this.#children.filter(e => !nodes.includes(e));
-		/** @type { { caller: Function; states: State<unknown>[] }[] } 管理を移譲する呼び出し元のリスト */
-		const callerList = [];
+	buildChild() { return []; }
 
-		// 追加の実施
-		for (const node of nodes) {
-			if (node instanceof StateNode) {
-				this.#element.appendChild(node.element);
-				// StateDomNodeとStateTextNodeは破棄してもいいように呼び出し元を移譲する
-				if (node instanceof StateDomNode) {
-					callerList.push(...node.callerList, ...node.#childrenCallerList);
-				}
-				else if (node instanceof StateTextNode) {
-					callerList.push(...node.callerList);
-				}
-			}
-			else {
-				this.#element.appendChild(node);
+	/**
+	 * 自要素を構築する(子要素は構築しない)
+	 */
+	buildCurrent() {}
+}
+
+/**
+ * 状態を持ったDOMノード
+ * @template { string } K
+ */
+class StateDomNode extends StateNode {
+	/** @type { K } HTMLタグ */
+	#tag;
+	/** @type { CtxDomPropTypes<CreatedElementType<K>> } プロパティ */
+	#props;
+	/** @type { CtxChildType } 子要素を生成する関数 */
+	#genChildren;
+	/** @type { CreatedElementType<K> | undefined } DOMノード */
+	#element = undefined;
+	/** @type { (HTMLElement | StateNode)[] } 子要素 */
+	#children = [];
+	/** @type { ObservableStates<K> | undefined } 観測する対象 */
+	#observableStates = undefined;
+
+	/**
+	 * コンストラクタ
+	 * @param { Context } ctx ノードを扱っているコンテキスト
+	 * @param { K } tag HTMLタグ
+	 * @param { CtxDomPropTypes<CreatedElementType<K>> } props プロパティ
+	 * @param { CtxChildType } genChildren 子要素を生成する関数
+	 */
+	constructor(ctx, tag, props, genChildren) {
+		super(ctx, []);
+		this.#tag = tag;
+		this.#props = props;
+		this.#genChildren = genChildren;
+	}
+
+	/**
+	 * DOMノードの取得
+	 * @returns { HTMLElement | undefined }
+	 */
+	get element() { return this.#element; }
+
+	/**
+	 * 子要素となるノードの取得
+	 * @returns { StateNode[] }
+	 */
+	get children() { return this.#children; }
+
+	/**
+	 * ノードの削除
+	 */
+	remove() {
+		super.remove();
+		this.#element?.remove();
+	}
+
+	/**
+	 * 子要素となるノードの取得
+	 * @returns { StateNode[] }
+	 */
+	buildChild() {
+		// 現在存在する子要素の破棄
+		this.#children.forEach(child => child.remove());
+
+		// 子要素の生成
+		this.#children = this.ctx.normalizeCtxChild(this.#genChildren());
+		return [...this.#children];
+	}
+
+	/**
+	 * 自要素を構築する(子要素は構築しない)
+	 */
+	buildCurrent() {
+		// 現在存在するノードの削除
+		this.remove();
+
+		// DOMノードの生成
+		this.#element = document.createElement(this.#tag);
+
+		// プロパティの設定
+		for (const key in this.#props) {
+			const val = this.#props[key];
+			if (val !== undefined && val !== null && val !== false) {
+				const caller = this.ctx.setParam(val, val => {
+					// styleはオブジェクト型による設定を許容するため処理を特殊化
+					if (key === 'style') {
+						if (val !== undefined && val !== null && val !== false) {
+							for (const styleKey in val) {
+								const caller = this.ctx.setParam(
+									val[styleKey],
+									val => this.#element.style[styleKey] = val ?? '',
+									Context.DOM_UPDATE
+								);
+								if (caller && caller.states.length > 0) this.callerList.push(caller);
+							}
+						}
+						else {
+							this.#element.removeAttribute('style');
+						}
+					}
+					// その他プロパティはそのまま設定する
+					else {
+						this.#element[key] = val ?? '';
+					}
+				}, Context.DOM_UPDATE);
+				if (caller && caller.states.length > 0) this.callerList.push(caller);
 			}
 		}
 
-		// 差分の削除
-		removeList.forEach(e => e.remove());
-		this.#childrenCallerList.filter(e => !callerList.includes(e)).forEach(caller => caller.states.forEach(s => s.delete(caller.caller)));
-
-		// 子要素のセット
-		this.#children = nodes;
-		this.#childrenCallerList = callerList;
+		// 観測の評価
+		if (this.#observableStates) {
+			this.#observeImpl(this.#observableStates);
+			this.#observableStates = undefined;
+		}
 	}
 
 	/**
@@ -307,166 +500,134 @@ class StateDomNode extends StateNode {
 	 * @param { ObservableStates<K> } props 観測する対象
 	 */
 	observe(props) {
+		this.#observableStates = props;
+		return this;
+	}
+
+	/**
+	 * ノードの内部の状態の観測の実装部
+	 * @param { ObservableStates<K> } props 観測する対象
+	 */
+	#observeImpl(props) {
 		// Web Componentは対象外
 		if (customElements.get(this.#element.tagName.toLowerCase())) {
 			throw new Error('Observation of Web Component in StateDomNode is not supported.');
 		}
 
+		/**
+		 * 状態の伝播に関する参照情報の設定
+		 * @param { ObservableStates<K> } props 観測する対象
+		 * @param { string } targets 監視対象のパラメータ
+		 * @param { (key: string) => (state: State<unknown>) => void } callback onreferenceに設定するコールバック
+		 */
+		const setReference = (props, targets, callback) => {
+			for (const name of targets) {
+				/** @type { State<unknown> | undefined } */
+				const state = props[name];
+				if (state) {
+					const c = callback(name);
+					if ((!state.onreference && state.count > 0) || (state.onreference && state.onreference(state))) {
+						c(state);
+					}
+					else {
+						state.onreference = c;
+					}
+				}
+			}
+		};
+
+		/**
+		 * オブザーバによる状態の伝播に関する参照情報の設定
+		 * @param { (setter: (element: HTMLElement) => void) => void } observer イベントリスナのタイプ
+		 * @param { ObservableStates<K> } props 観測する対象
+		 * @param { string[] } targets 監視対象のパラメータ
+		 */
+		const setReferenceToObserver = (observer, props, targets) => {
+			let callbackEventListenerFlag = true;
+			/**
+			 * inputイベントの構築
+			 * @param { string } key
+			 * @returns { (state: State<unknown>) => void }
+			 */
+			const callbackEventListener = key => state => {
+				state.onreference = undefined;
+				
+				// 初回呼び出し時にのみイベントを設置する
+				if (callbackEventListenerFlag) {
+					callbackEventListenerFlag = !callbackEventListenerFlag;
+					observer(element => {
+						// 各種状態の設定
+						for (const name of targets) {
+							/** @type { State<unknown> | undefined } */
+							const state = props[name];
+							const value = element[name];
+							if (state && state.org !== value) {
+								state.value = value;
+							}
+						}
+					});
+				}
+				// 初期値の伝播
+				state.value = this.#element[key];
+				return true;
+			};
+
+			// 状態の監視の設定
+			setReference(props, targets, callbackEventListener);
+		};
+
+		/**
+		 * イベントリスナのオブザーバによる状態の伝播に関する参照情報の設定
+		 * @template { HTMLElementEventMap } L
+		 * @param { L } type イベントリスナのタイプ
+		 * @param { ObservableStates<K> } props 観測する対象
+		 * @param { string[] } targets 監視対象のパラメータ
+		 */
+		const setReferenceToEventListenerObserver = (type, props, targets) => {
+			setReferenceToObserver(setter => {
+				this.#element.addEventListener(type, e => setter(e.target));
+			}, props, targets);
+		};
+
 		//
 		// ObservableHTMLElementStateに関する項目の検証
 		//
 		{
-			let callbackResizeObserverFlag = true;
-			/**
-			 * ResizeObserverの構築
-			 * @param { State<number> } state 
-			 */
-			const callbackResizeObserver= state => {
-				state.onreference = undefined;
-				
-				// 初回呼び出し時にのみイベントを設置する
-				if (callbackResizeObserverFlag) {
-					callbackResizeObserverFlag = !callbackResizeObserverFlag;
-					const resizeObserver = new ResizeObserver(entries => {
+			setReferenceToObserver(setter => {
+				const resizeObserver = new ResizeObserver(entries => {
+					// entriesが複数存在することも加味して状態変数の変化の伝播を遅延する
+					this.ctx.lazy(() => {
 						for (const entry of entries) {
-							// clientHeigthの監視
-							if (props?.clientHeigth !== undefined && props.clientHeigth.org !== this.#element.clientHeight) {
-								props.clientHeight.value = this.#element.clientHeight;
-							}
-							// clientWidthの監視
-							if (props?.clientWidth !== undefined && props.clientWidth.org !== this.#element.clientWidth) {
-								props.clientWidth.value = this.#element.clientWidth;
-							}
+							setter(this.#element);
 						}
-					});
-					resizeObserver.observe(this.#element);
-				}
-			};
-			if (props?.clientHeigth !== undefined) {
-				props.clientHeigth.onreference = callbackResizeObserver;
-				props.clientHeight.org = this.#element.clientHeight;
-			}
-			if (props?.clientWidth !== undefined) {
-				props.clientWidth.onreference = callbackResizeObserver;
-				props.clientWidth.org = this.#element.clientWidth;
-			}
+					})();
+				});
+				resizeObserver.observe(this.#element);
+			}, props, ['clientHeigth', 'clientWidth']);
+			let callbackResizeObserverFlag = true;
 		}
 
 		//
 		// ObservableHTMLInputElementStateに関する項目の検証
 		//
 		if (this.#element instanceof HTMLInputElement) {
-			let callbackInputEventListenerFlag = true;
-			/**
-			 * ResizeObserverの構築
-			 * @param { State<number> } state 
-			 */
-			const callbackInputEventListener= state => {
-				state.onreference = undefined;
-				
-				// 初回呼び出し時にのみイベントを設置する
-				if (callbackInputEventListenerFlag) {
-					callbackInputEventListenerFlag = !callbackInputEventListenerFlag;
-
-					this.#element.addEventListener('input', e => {
-						// valueの監視
-						if (props?.value !== undefined && props.value.org !== e.target.value) {
-							props.value.value = e.target.value;
-						}
-						// valueAsDateの監視
-						if (props?.valueAsDate !== undefined && props.valueAsDate.org !== e.target.valueAsDate) {
-							props.valueAsDate.value = e.target.valueAsDate;
-						}
-						// valueAsNumberの監視
-						if (props?.valueAsNumber !== undefined && props.valueAsNumber.org !== e.target.valueAsNumber) {
-							props.valueAsNumber.value = e.target.valueAsNumber;
-						}
-					});
-				}
-			};
-			if (props?.value !== undefined) {
-				props.value.onreference = callbackInputEventListener;
-				props.value.org = this.#element.value;
-			}
-			if (props?.valueAsDate !== undefined) {
-				props.valueAsDate.onreference = callbackInputEventListener;
-				props.valueAsDate.org = this.#element.valueAsDate;
-			}
-			if (props?.valueAsNumber !== undefined) {
-				props.valueAsNumber.onreference = callbackInputEventListener;
-				props.valueAsNumber.org = this.#element.valueAsNumber;
-			}
-			if (props?.checked !== undefined) {
-				props.checked.onreference = state => {
-					state.onreference = undefined;
-					this.#element.addEventListener('change', e => {
-						// checkedの監視
-						if (props.checked.org !== e.target.checked) {
-							props.checked.value = e.target.checked;
-						}
-					});
-				};
-				props.checked.org = this.#element.checked;
-			}
+			setReferenceToEventListenerObserver('input', props, ['value', 'valueAsDate', 'valueAsNumber']);
+			setReferenceToEventListenerObserver('change', props, ['checked']);
 		}
 
 		//
 		// ObservableHTMLSelectElementに関する項目の検証
 		//
 		if (this.#element instanceof HTMLSelectElement) {
-			let callbackChangeEventListenerFlag = true;
-			/**
-			 * ResizeObserverの構築
-			 * @param { State<number> } state 
-			 */
-			const callbackChangeEventListener= state => {
-				state.onreference = undefined;
-				
-				// 初回呼び出し時にのみイベントを設置する
-				if (callbackChangeEventListenerFlag) {
-					callbackChangeEventListenerFlag = !callbackChangeEventListenerFlag;
-
-					this.#element.addEventListener('change', e => {
-						// valueの監視
-						if (props?.value !== undefined && props.value.org !== e.target.value) {
-							props.value.value = e.target.value;
-						}
-						// selectedOptionsの監視
-						if (props?.selectedOptions !== undefined && props.selectedOptions.org !== e.target.selectedOptions) {
-							props.selectedOptions.value = e.target.selectedOptions;
-						}
-					});
-				}
-			};
-			if (props?.value !== undefined) {
-				props.value.onreference = callbackChangeEventListener;
-				props.value.org = this.#element.value;
-			}
-			if (props?.selectedOptions !== undefined) {
-				props.selectedOptions.onreference = callbackChangeEventListener;
-				props.selectedOptions.org = this.#element.selectedOptions;
-			}
+			setReferenceToEventListenerObserver('change', props, ['value', 'selectedOptions']);
 		}
 
 		//
 		// ObservableHTMLTextAreaElementに関する項目の検証
 		//
 		if (this.#element instanceof HTMLTextAreaElement) {
-			if (props?.value !== undefined) {
-				props.value.onreference = state => {
-					state.onreference = undefined;
-					this.#element.addEventListener('input', e => {
-						// valueの監視
-						if (props?.value !== undefined && props.value.org !== e.target.value) {
-							props.value.value = e.target.value;
-						}
-					});
-				};
-				props.value.org = this.#element.value;
-			}
+			setReferenceToEventListenerObserver('input', props, ['value']);
 		}
-
-		return this;
 	}
 }
 
@@ -475,39 +636,110 @@ class StateDomNode extends StateNode {
  * @template { ComponentType<K> } K
  */
 class StateComponent extends StateNode {
-	/** @type { Context } コンポーネントを扱っているコンテキスト */
-	#ctx;
-	/** @type { HTMLElement | Text | StateNode } コンポーネントを代表するノード */
+	/** @type { K } コンポーネントを示す関数 */
+	#component;
+	/** @type { CtxCompPropTypes<K> } プロパティ */
+	#props;
+	/** @type { CtxChildType } 子要素を生成する関数 */
+	#genChildren;
+	/** @type { StateNode | undefined } コンポーネントを代表するノード */
 	#element;
 	/** @type { ComponentExposeStates<K> } コンポーネントが公開している状態 */
 	#exposeStates;
+	/** @type { ObservableStates<K> | undefined } 観測する対象 */
+	#observableStates = undefined;
 
 	/**
 	 * コンストラクタ
 	 * @param { Context } ctx コンポーネントを扱っているコンテキスト
-	 * @param { HTMLElement | StateNode } element コンポーネントを代表するノード
-	 * @param { ComponentExposeStates<K> } exposeStates コンポーネントが公開している状態
-	 * @param { { caller: Function; states: State<unknown>[] }[] } callerList 呼び出し元のリスト
+	 * @param { K } component コンポーネントを示す関数
+	 * @param { CtxCompPropTypes<K> } props プロパティ
+	 * @param { CtxChildType } genChildren 子要素を生成する関数
 	 */
-	constructor(ctx, element, exposeStates, callerList) {
-		super(callerList);
-		this.#ctx = ctx;
-		this.#element = element;
-		this.#exposeStates = exposeStates;
+	constructor(ctx, component, props, genChildren) {
+		super(ctx, []);
+		this.#component = component;
+		this.#props = props;
+		this.#genChildren = genChildren;
 	}
 
 	/**
 	 * DOMノードの取得
-	 * @returns { HTMLElement | Text }
+	 * @returns { HTMLElement | Text | undefined }
 	 */
-	get element() { return this.#element instanceof StateNode ? this.#element.element : this.#element; }
+	get element() { return this.#element?.element; }
+
+	/**
+	 * 子要素となるノードの取得
+	 * @returns { StateNode[] }
+	 */
+	get children() { return this.#element?.children ?? []; }
 
 	/**
 	 * ノードの削除
 	 */
 	remove() {
 		super.remove();
-		this.#element.remove();
+		this.#element?.remove();
+	}
+
+	/**
+	 * 子要素を構築する(孫要素以降は構築しない)
+	 * @returns { StateNode[] }
+	 */
+	buildChild() {
+		return this.#element?.buildChild?.() ?? [];
+	}
+
+	/**
+	 * 自要素を構築する(子要素は構築しない)
+	 */
+	buildCurrent() {
+		// 現在存在するノードの削除
+		this.remove();
+
+		/** @type { CompPropTypes<K> } コンポーネントに渡すプロパティ */
+		const compProps = {};
+		for (const key in this.#component.propTypes ?? {}) {
+			const val = this.#props[key];
+			// 渡されたプロパティが状態変数なら単方向データに変換して渡すようにする
+			if (val instanceof State || val instanceof Computed) {
+				const s = new State(val.value, val instanceof State ? val.ctx : this.ctx);
+				const caller = this.ctx.unidirectional(val, s);
+				if (caller && caller.states.length > 0) this.callerList.push(caller);
+				compProps[key] = s;
+			}
+			else {
+				// 値が与えられなかった場合はデフォルト値から持ってくる
+				const val2 = val === undefined || val === null || val === false ? this.#component.propTypes[key] : val;
+				if (val2 !== undefined && val2 !== null && val2 !== false) {
+					compProps[key] = new State(val2, this.ctx);
+				}
+			}
+		}
+		/** @type { CompChildType } コンポーネントに渡す子要素 */
+		const compChild = () => {
+			return this.ctx.normalizeCtxChild(this.#genChildren());
+		};
+
+		// ノードの生成
+		const element = this.#component(this.ctx, compProps, compChild);
+		if (element instanceof StateNode) {
+			this.#element = element;
+		}
+		else {
+			this.#element = element.node;
+			this.#exposeStates = element.exposeStates ?? {};
+		}
+
+		// 観測の評価
+		if (this.#observableStates) {
+			this.#observeImpl(this.#observableStates);
+			this.#observableStates = undefined;
+		}
+
+		// コンポーネントのルートノードの評価
+		this.#element.buildCurrent();
 	}
 
 	/**
@@ -515,24 +747,50 @@ class StateComponent extends StateNode {
 	 * @param { ObservableStates<K> } props 観測する対象
 	 */
 	observe(props) {
+		this.#observableStates = props;
+		return this;
+	}
+
+	/**
+	 * ノードの内部の状態を観測する
+	 * @param { ObservableStates<K> } props 観測する対象
+	 */
+	#observeImpl(props) {
 		for (const key in props) {
 			const state = props[key];
 			const exposeState = this.#exposeStates[key];
 			// 状態変数の場合は単方向の関連付けを実施
 			if (exposeState instanceof State || exposeState instanceof Computed) {
-				const callerList = this.#ctx.unidirectional(exposeState, state);
-				// 関連付けられた状態変数のonreferenceを連鎖的に呼び出す
-				state.onreference = s => {
-					s.onreference = undefined;
-					callerList.states.forEach(state => state?.onreference(state));
-				};
+				this.ctx.unuseReferenceCheck(() => {
+					const callerList = this.ctx.unidirectional(exposeState, state);
+					// state.onreferenceなしでstateが1つ以上の参照をもつ(親への状態の伝播なしで状態の参照が存在する場合)
+					// もしくはstate.onreferenceなしでstateが2つ以上の参照をもつ(親への状態の伝播ありで状態の参照が存在する場合)
+					// もしくはonreference()の戻り値がtrue(親への状態の伝播ありで祖先で状態の参照が存在する場合)
+					// の場合に状態変数は利用されている
+					const flag = (!state.onreference && state.count > 0) || (state.onreference && state.onreference(state));
+					callerList.states.forEach(s => {
+						s.onreference = s2 => {
+							s2.onreference = undefined;
+							return flag;
+						};
+					});
+					// このタイミングで値が利用されていない際はchoose()などで後から利用される可能性があるため
+					// 後から通知を行うことができるようにする
+					if (!flag) {
+						// 関連付けられた状態変数のonreferenceを連鎖的に呼び出す
+						state.onreference = s => {
+							s.onreference = undefined;
+							callerList.states.forEach(state => state.onreference?.(state));
+							return false;
+						};
+					}
+				});
 			}
 			// 状態変数でない場合はそのまま設定
 			else {
 				state.value = exposeState;
 			}
 		}
-		return this;
 	}
 }
 
@@ -546,10 +804,18 @@ class StateComponent extends StateNode {
  * @template T
  */
 class StateChooseNode extends StateNode {
-	/** @type { { caller: Function; states: State<unknown>[] } | undefined } 表示の切り替えに関する呼び出し元 */
-	#caller;
-	/** @type { StateNode | HTMLElement | Text } 現在表示しているノード */
+	/** @type { {} } chooseについてのプロパティ(現在はなし) */
+	#props;
+	/** @type { T } 表示対象を切り替える基準となる変数 */
+	#val;
+	/** @type { CallbackStateChooseNode<T> } valからDOMノードを選択する関数 */
+	#callback;
+	/** @type { { caller: CallerType; states: State<unknown>[] } | undefined } 表示の切り替えに関する呼び出し元 */
+	#caller = undefined;
+	/** @type { StateNode | undefined } 現在表示しているノード */
 	#currentNode = undefined;
+	/** @type { boolean } 子要素が構築されたことがあるかを示すフラグ */
+	#genChildFlag = false;
 
 	/**
 	 * コンストラクタ
@@ -559,26 +825,29 @@ class StateChooseNode extends StateNode {
 	 * @param { CallbackStateChooseNode<T> } callback valからDOMノードを選択する関数
 	 */
 	constructor(ctx, props, val, callback) {
-		super([]);
-		this.#caller = ctx.setParam(val, val => {
-			const parent = this.element?.parentElement;
-			const nextSibling = this.element?.nextElementSibling;
-			this.#currentNode?.remove();
-			const nodeList = ctx.normalizeCtxChild([callback(val)]);
-			// 表示する要素が存在しないときは代わりにプレースホルダとして空のTextを表示
-			this.#currentNode = nodeList.length > 0 ? nodeList[0] : document.createTextNode('');
-			// 親が存在するならノードを挿入する
-			if (parent) {
-				parent.insertBefore(this.element, nextSibling);
-			}
-		});
+		super(ctx, []);
+		this.#props = props;
+		this.#val = val;
+		this.#callback = callback;
 	}
 
 	/**
 	 * DOMノードの取得
-	 * @returns { HTMLElement | Text }
+	 * @returns { HTMLElement | Text | undefined }
 	 */
-	get element() { return this.#currentNode instanceof StateNode ? this.#currentNode.element : this.#currentNode; }
+	get element() { return this.#currentNode?.element; }
+
+	/**
+	 * このノードを代表するノードの取得
+	 * @returns { StateNode | undefined }
+	 */
+	get node() { return this.#currentNode; }
+
+	/**
+	 * 子要素となるノードの取得
+	 * @returns { StateNode[] }
+	 */
+	get children() { return this.#currentNode?.children ?? []; }
 
 	/**
 	 * ノードの削除
@@ -586,7 +855,45 @@ class StateChooseNode extends StateNode {
 	remove() {
 		super.remove();
 		this.#currentNode?.remove();
-		this.#caller?.states.forEach(state => state.delete(this.#caller.caller));
+		this.#caller?.states?.forEach(state => state.delete(this.#caller.caller));
+	}
+
+	/**
+	 * 子要素を構築する(孫要素以降は構築しない)
+	 * @returns { StateNode[] }
+	 */
+	buildChild() {
+		this.#genChildFlag = true;
+		return this.#currentNode?.buildChild?.() ?? [];
+	}
+
+	/**
+	 * 自要素を構築する(子要素は構築しない)
+	 */
+	buildCurrent() {
+		// 現在存在するノードの削除
+		this.remove();
+
+		this.#caller = this.ctx.setParam(this.#val, val => {
+			const element = this.element;
+			const parent = element?.parentElement;
+			const nextSibling = element?.nextElementSibling;
+			this.#currentNode?.remove();
+			const nodeList = this.ctx.normalizeCtxChild([this.#callback(val)]);
+			// 表示する要素が存在しないときは代わりにプレースホルダとして空のTextを表示
+			this.#currentNode = nodeList.length > 0 ? nodeList[0] : new StateTextNode(this.ctx, document.createTextNode(''), []);
+			// 子要素が構築されたことある場合は構築する
+			if (this.#genChildFlag) {
+				this.#currentNode.build();
+			}
+			else {
+				this.#currentNode.buildCurrent();
+			}
+			// 親が存在するならノードを挿入する
+			if (parent) {
+				parent.insertBefore(this.element, nextSibling);
+			}
+		});
 	}
 }
 
@@ -628,7 +935,7 @@ class StateChooseNode extends StateNode {
  */
 
 /**
- * @typedef { () => CtxValueType<(StateNode | HTMLElement | Text | CtxValueType<string> | false | null | undefined)[]> } CtxChildType コンテキスト上での子要素の型
+ * @typedef { () => (StateNode | HTMLElement | Text | CtxValueType<string> | false | null | undefined)[] } CtxChildType コンテキスト上での子要素の型
  */
 
 /**
@@ -642,31 +949,111 @@ class StateChooseNode extends StateNode {
  */
 
 /**
- * @typedef { () => State<(StateNode | HTMLElement | Text)[]> } CompChildType コンポーネント上での子要素の型
+ * @typedef { () => StateNode[] } CompChildType コンポーネント上での子要素の型
  */
 
 /**
  * コンテキスト
  */
 class Context {
-	/** @type { { caller: Function; states: State<unknown>[] }[] } 状態変数とその呼び出し元を記録するスタック */
+	/** @type { { caller: CallerType; states: State<unknown>[] }[] } 状態変数とその呼び出し元を記録するスタック */
 	#stack = [];
 	/** @type { boolean[] } 参照のチェックを行う(Stateのonreferenceを呼び出す)かのフラグ */	
 	#checkReference = [true];
 	/** @type { Map<ComponentType<K>, string> } コンポーネントから定義されたWeb Component */
 	#componentMap = new Map();
 
+	/** 状態変数を参照している呼び出し元がDOMの更新であることを示すsymbol */
+	static DOM_UPDATE = Symbol('DOM_UPDATE');
+	/** @type { Set<Function> } DOMを更新するタスクの集合 */
+	#domUpdateTask = new Set();
+	/** @type { boolean } DOMの更新のタスクが既にマイクロタスクキューに追加されているか */
+	#domUpdateFlag = false;
+	/** @type { Set<CallerType>[] } 遅延評価対象の呼び出し元の集合についてのスタック */
+	#lazyUpdateStack = [];
+
 	get current() { return this.#stack.length === 0 ? undefined : this.#stack[this.#stack.length - 1].caller; }
 
 	/**
-	 * このコンテキストで関数を実行する(状態変数の更新操作は禁止)
-	 * @param { Function } caller 状態変数の呼び出し元となる関数
-	 * @return { { caller: Function; states: State<unknown>[] } }
+	 * このコンテキストで関数を実行する(状態変数の更新操作は基本的に禁止)
+	 * @param { Function | CallerType } caller 状態変数の呼び出し元となる関数
+	 * @return { { caller: CallerType; states: State<unknown>[] } }
 	 */
 	call(caller) {
-		this.#stack.push({ caller, states: [] });
-		caller();
+		const caller2 = caller instanceof Function ? { caller } : caller;
+		this.#stack.push({ caller: caller2, states: [] });
+		caller2.caller();
 		return this.#stack.pop();
+	}
+
+	/**
+	 * 状態の更新の通知を行う
+	 * @param { Iterable<CallerType> } itr 状態の参照先のハンドラ
+	 */
+	updateState(itr) {
+		// 状態の遅延評価を行う場合は遅延評価を行う対象の集合に記憶する
+		if (this.#lazyUpdateStack.length > 0) {
+			const set = this.#lazyUpdateStack[this.#lazyUpdateStack.length - 1];
+			for (const val of itr) {
+				set.add(val);
+			}
+			return;
+		}
+
+		for (const val of itr) {
+			// DOMを更新する関数の場合
+			if (val.label === Context.DOM_UPDATE) {
+				this.#domUpdateTask.add(val.caller);
+				// マイクロタスクに追加する
+				if (!this.#domUpdateFlag) {
+					this.#domUpdateFlag = true;
+					queueMicrotask(() => {
+						// タスクの実行と初期化
+						const task = this.#domUpdateTask;
+						this.#domUpdateTask = new Set();
+						this.#domUpdateFlag = false;
+						task.forEach(t => t());
+					});
+				}
+			}
+			// 未定義の場合は同期的に即時評価
+			else {
+				val.caller();
+			}
+		}
+	}
+
+	/**
+	 * callback内での状態変数の変更の伝播を遅延させるハンドラを生成する
+	 * @param { Function } callback 状態変数の変更操作を含む関数
+	 * @returns { () => void } 状態変数の変更の伝播を行う関数
+	 */
+	lazy(callback) {
+		const set = new Set();
+		this.#lazyUpdateStack.push(set);
+		callback();
+		this.#lazyUpdateStack.pop();
+		return set.size === 0 ? () => {} : () => this.updateState(set);
+	}
+
+	/**
+	 * 参照のチェックを利用するコンテキストで関数を実行する
+	 * @param { () => unknown } callback 参照チェックを利用するコンテキストで実行するコールバック
+	 */
+	useReferenceCheck(callback) {
+		this.#checkReference.push(true);
+		callback();
+		this.#checkReference.pop();
+	}
+
+	/**
+	 * 参照のチェックを利用しないコンテキストで関数を実行する
+	 * @param { () => unknown } callback 参照チェックを利用するコンテキストで実行するコールバック
+	 */
+	unuseReferenceCheck(callback) {
+		this.#checkReference.push(false);
+		callback();
+		this.#checkReference.pop();
 	}
 
 	/**
@@ -700,14 +1087,12 @@ class Context {
 	 * @param { State<T> | Computed<T> } src 作成元のデータ
 	 * @param { State<U> } dest 作成対象のデータ
 	 * @param { (from: T) => U } trans 変換関数
-	 * @returns { { caller: Function; states: State<unknown>[] } } 呼び出し元情報
+	 * @returns { { caller: CallerType; states: State<unknown>[] } } 呼び出し元情報
 	 */
 	unidirectional(src, dest, trans = x => x) {
 		const ctx = src instanceof State ? src.ctx : this;
 		let circuit = false;
-		// 単方向データの作成時は参照のチェックを無効化する
-		this.#checkReference.push(false);
-		const result = ctx.call(() => {
+		return ctx.call(() => {
 			// srcの変更で必ず発火させつつ
 			// destの変更およびsrc = destな操作で発火および循環させない
 			if (!circuit) {
@@ -716,8 +1101,6 @@ class Context {
 				circuit = false;
 			}
 		});
-		this.#checkReference.pop();
-		return result;
 	}
 
 	/**
@@ -725,7 +1108,7 @@ class Context {
 	 * @template T
 	 * @param { State<T> } src 作成元のデータ
 	 * @param { State<T> } dest 作成対象のデータ
-	 * @returns { { caller: Function; states: State<unknown>[] }[] } 呼び出し元情報
+	 * @returns { { caller: CallerType; states: State<unknown>[] }[] } 呼び出し元情報
 	 */
 	bidirectional(src, dest) {
 		return [this.unidirectional(src, dest), this.unidirectional(dest, src)];
@@ -736,12 +1119,13 @@ class Context {
 	 * @template Val
 	 * @param { CtxValueType<Val> } val パラメータの値
 	 * @param { (val: Val) => unknown } setter パラメータの設定のルール
+	 * @param { CallerType['label'] } label setterに付加するラベル
 	 */
-	setParam(val, setter) {
+	setParam(val, setter, label = undefined) {
 		// 状態変数の場合は変更を監視
 		if (val instanceof State || val instanceof Computed) {
 			const ctx = val instanceof State ? val.ctx : this;
-			return ctx.call(() => setter(val.value));
+			return ctx.call({ caller: () => setter(val.value), label });
 		}
 		// 状態変数でない場合はそのまま設定
 		else {
@@ -763,25 +1147,29 @@ class Context {
 	/**
 	 * ノードリストを正規化する
 	 * @param { ReturnType<CtxChildType> } nodeList 対象のノード
-	 * @return { (StateNode | HTMLElement | Text)[] }
+	 * @return { StateNode[] }
 	 */
 	normalizeCtxChild(nodeList) {
-		return this.useParam(nodeList, n => {
-			const result = [];
-			n.forEach(e => {
-				const node = this.useParam(e, val => typeof val === 'string' ? document.createTextNode(val) : val);
-				if (node) {
-					// 子にテキストの状態が渡された場合は変更を監視する
-					if (e instanceof State || e instanceof Computed) {
-						result.push(new StateTextNode(node, [this.call(() => node.data = e.value)]))
-					}
-					else {
-						result.push(node);
-					}
+		const result = [];
+		nodeList.forEach(e => {
+			const node = this.useParam(e, val => typeof val === 'string' ? document.createTextNode(val) : val);
+			if (node) {
+				// 子にテキストの状態が渡された場合は変更を監視する
+				if (e instanceof State || e instanceof Computed) {
+					result.push(new StateTextNode(this, node, [this.call(() => node.data = e.value)]));
 				}
-			});
-			return result;
+				else if (node instanceof Text) {
+					result.push(new StateTextNode(this, node, []));
+				}
+				else if (node instanceof HTMLElement) {
+					result.push(new StateHTMLElement(this, node, []));
+				}
+				else {
+					result.push(node);
+				}
+			}
 		});
+		return result;
 	};
 
 	/**
@@ -793,105 +1181,107 @@ class Context {
 	 * @returns { K extends string ? StateDomNode<K> : StateComponent<K> }
 	 */
 	$(tag, props = {}, children = () => []) {
-		/** @type { { caller: Function; states: State<unknown>[] }[] } このDOMノード内での外部からの状態変数の呼び出し元情報のリスト */
-		const callerList = [];
+		/** @type { { caller: CallerType; states: State<unknown>[] }[] } このDOMノード内での外部からの状態変数の呼び出し元情報のリスト */
+		//const callerList = [];
 
 		// HTMLタグによるDOMノードの生成(Web Componentsも含む)
 		if (typeof tag === 'string') {
-			const element = document.createElement(tag);
-			const stateElement = new StateDomNode(element, callerList);
+			return new StateDomNode(this, tag, props, children);
+			// const element = document.createElement(tag);
+			// const stateElement = new StateDomNode(this, element, children, callerList);
 
-			// プロパティの設定
-			for (const key in props) {
-				const val = props[key];
-				if (val !== undefined && val !== null && val !== false) {
-					const caller = this.setParam(val, val => {
-						// styleはオブジェクト型による設定を許容するため処理を特殊化
-						if (key === 'style') {
-							if (val !== undefined && val !== null && val !== false) {
-								for (const styleKey in val) {
-									const caller = this.setParam(val[styleKey], val => element.style[styleKey] = val ?? '');
-									if (caller && caller.states.length > 0) callerList.push(caller);
-								}
-							}
-							else {
-								element.removeAttribute('style');
-							}
-						}
-						// その他プロパティはそのまま設定する
-						else {
-							element[key] = val ?? '';
-						}
-					});
-					if (caller && caller.states.length > 0) callerList.push(caller);
-				}
-			}
+			// // プロパティの設定
+			// for (const key in props) {
+			// 	const val = props[key];
+			// 	if (val !== undefined && val !== null && val !== false) {
+			// 		const caller = this.setParam(val, val => {
+			// 			// styleはオブジェクト型による設定を許容するため処理を特殊化
+			// 			if (key === 'style') {
+			// 				if (val !== undefined && val !== null && val !== false) {
+			// 					for (const styleKey in val) {
+			// 						const caller = this.setParam(val[styleKey], val => element.style[styleKey] = val ?? '');
+			// 						if (caller && caller.states.length > 0) callerList.push(caller);
+			// 					}
+			// 				}
+			// 				else {
+			// 					element.removeAttribute('style');
+			// 				}
+			// 			}
+			// 			// その他プロパティはそのまま設定する
+			// 			else {
+			// 				element[key] = val ?? '';
+			// 			}
+			// 		});
+			// 		if (caller && caller.states.length > 0) callerList.push(caller);
+			// 	}
+			// }
 
-			const caller2 = this.setParam(children(), val => {
-				const nodeList = this.normalizeCtxChild(val);
-				stateElement.replace(nodeList);
-			});
-			if (caller2 && caller2.states.length > 0) callerList.push(caller2);
+			// const caller2 = this.setParam(children(), val => {
+			// 	const nodeList = this.normalizeCtxChild(val);
+			// 	stateElement.replace(nodeList);
+			// });
+			// if (caller2 && caller2.states.length > 0) callerList.push(caller2);
 
-			return stateElement;
+			// return stateElement;
 		}
 		// コンポーネントによるDOMノード生成
 		else {
-			// WebComponentプロパティの検査
-			if (tag?.webComponent?.name && !this.#componentMap.has(tag)) {
-				this.defineWebComponent(tag.webComponent.name, tag, tag.webComponent?.shadow ?? false, tag.webComponent?.options);
-			}
+			return new StateComponent(this, tag, props, children);
+			// // WebComponentプロパティの検査
+			// if (tag?.webComponent?.name && !this.#componentMap.has(tag)) {
+			// 	this.defineWebComponent(tag.webComponent.name, tag, tag.webComponent?.shadow ?? false, tag.webComponent?.options);
+			// }
 
-			// コンポーネントから定義されたWeb ComponentによるDOMノードの生成
-			if (this.#componentMap.has(tag)) {
-				const element = document.createElement(this.#componentMap.get(tag));
-				return element.createStateComponent(props, children);
-			}
-			// 通常のDOMノードの生成
-			else {
-				/** @type { CompPropTypes<K> } コンポーネントに渡すプロパティ */
-				const compProps = {};
-				for (const key in tag.propTypes ?? {}) {
-					const val = props[key];
-					// 渡されたプロパティが状態変数なら単方向データに変換して渡すようにする
-					if (val instanceof State || val instanceof Computed) {
-						const s = new State(val.value, val instanceof State ? val.ctx : this);
-						const caller = this.unidirectional(val, s);
-						if (caller && caller.states.length > 0) callerList.push(caller);
-						compProps[key] = s;
-					}
-					else {
-						// 値が与えられなかった場合はデフォルト値から持ってくる
-						const val2 = val === undefined || val === null || val === false ? tag.propTypes[key] : val;
-						if (val2 !== undefined && val2 !== null && val2 !== false) {
-							compProps[key] = new State(val2, this);
-						}
-					}
-				}
-				/** @type { CompChildType } コンポーネントに渡す子要素 */
-				const compChild = () => {
-					const nodeList = children();
-					const stateNodeList = new State([], nodeList instanceof State ? nodeList.ctx : this);
-					if (nodeList instanceof State || nodeList instanceof Computed) {
-						// 呼び出し元情報の取得は不要
-						this.unidirectional(nodeList, stateNodeList, v => this.normalizeCtxChild(v));
-						if (caller && caller.states.length > 0) callerList.push(caller);
-					}
-					else {
-						stateNodeList.org = this.normalizeCtxChild(nodeList);
-					}
-					return stateNodeList;
-				};
+			// // コンポーネントから定義されたWeb ComponentによるDOMノードの生成
+			// if (this.#componentMap.has(tag)) {
+			// 	const element = document.createElement(this.#componentMap.get(tag));
+			// 	return element.createStateComponent(props, children);
+			// }
+			// // 通常のDOMノードの生成
+			// else {
+			// 	/** @type { CompPropTypes<K> } コンポーネントに渡すプロパティ */
+			// 	const compProps = {};
+			// 	for (const key in tag.propTypes ?? {}) {
+			// 		const val = props[key];
+			// 		// 渡されたプロパティが状態変数なら単方向データに変換して渡すようにする
+			// 		if (val instanceof State || val instanceof Computed) {
+			// 			const s = new State(val.value, val instanceof State ? val.ctx : this);
+			// 			const caller = this.unidirectional(val, s);
+			// 			if (caller && caller.states.length > 0) callerList.push(caller);
+			// 			compProps[key] = s;
+			// 		}
+			// 		else {
+			// 			// 値が与えられなかった場合はデフォルト値から持ってくる
+			// 			const val2 = val === undefined || val === null || val === false ? tag.propTypes[key] : val;
+			// 			if (val2 !== undefined && val2 !== null && val2 !== false) {
+			// 				compProps[key] = new State(val2, this);
+			// 			}
+			// 		}
+			// 	}
+			// 	/** @type { CompChildType } コンポーネントに渡す子要素 */
+			// 	const compChild = () => {
+			// 		const nodeList = children();
+			// 		const stateNodeList = new State([], nodeList instanceof State ? nodeList.ctx : this);
+			// 		if (nodeList instanceof State || nodeList instanceof Computed) {
+			// 			// 呼び出し元情報の取得は不要
+			// 			this.unidirectional(nodeList, stateNodeList, v => this.normalizeCtxChild(v));
+			// 			if (caller && caller.states.length > 0) callerList.push(caller);
+			// 		}
+			// 		else {
+			// 			stateNodeList.org = this.normalizeCtxChild(nodeList);
+			// 		}
+			// 		return stateNodeList;
+			// 	};
 
-				const element = tag(this, compProps, compChild);
-				if (element instanceof StateNode) {
-					return new StateComponent(this, element, {}, callerList);
-				}
-				else {
-					const exposeStates = element.exposeStates ?? {};
-					return new StateComponent(this, element.node, exposeStates, callerList);
-				}
-			}
+			// 	const element = tag(this, compProps, compChild);
+			// 	if (element instanceof StateNode) {
+			// 		return new StateComponent(this, element, {}, callerList);
+			// 	}
+			// 	else {
+			// 		const exposeStates = element.exposeStates ?? {};
+			// 		return new StateComponent(this, element.node, exposeStates, callerList);
+			// 	}
+			// }
 		}
 	}
 
@@ -1007,11 +1397,11 @@ class Context {
 				let rootNode = undefined;
 				if (element instanceof StateNode) {
 					this.#exposeState = {};
-					rootNode = element.element;
+					rootNode = element.build().element;
 				}
 				else {
 					this.#exposeState = element.exposeStates ?? {};
-					rootNode = element.node.element;
+					rootNode = element.node.build().element;
 				}
 
 				if (shadow) {
@@ -1131,8 +1521,8 @@ function computed(f) {
  */
 function watch(state, f, ctx = undefined) {
 	const ctx2 = ctx || new Context();
-	const trigger = new State(0, ctx2);
-	const caller = () => { trigger.value = trigger.value === 0 ? 1 : 2; };
+	const trigger = new State(-1, ctx2);
+	const caller = () => { trigger.value = trigger.value % 2 + 1; };
 
 	if (state instanceof State) {
 		let prevState =  state.value;
@@ -1145,7 +1535,7 @@ function watch(state, f, ctx = undefined) {
 
 		const ctx2Caller = ctx2.call(() => {
 			// 初回には実行されないようにする
-			if (trigger.value === 2) {
+			if (trigger.value !== 0) {
 				f(prevState, nextState);
 			}
 		});
@@ -1161,7 +1551,7 @@ function watch(state, f, ctx = undefined) {
 
 		const ctx2Caller = ctx2.call(() => {
 			// 初回には実行されないようにする
-			if (trigger.value === 2) {
+			if (trigger.value !== 0) {
 				f();
 			}
 		});
