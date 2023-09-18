@@ -358,6 +358,17 @@ class StateNode {
 	mount(target) {
 		this.#moutnImpl(target)();
 	}
+
+	/**
+	 * 後からマウント可能なDOMノードを構築する
+	 * @param { HTMLElement | undefined } target 書き込み対象のDOMノード
+	 * @returns { HTMLElement }
+	 */
+	write(target) {
+		// 変更の伝播を破棄する
+		this.#moutnImpl(target);
+		return this.element;
+	}
 }
 
 /**
@@ -576,6 +587,21 @@ class StateDomNode extends StateNode {
 						}
 						else {
 							this.#element.removeAttribute('style');
+						}
+					}
+					// 属性とプロパティで動作に差異のある対象の設定
+					const lowerTag = this.#tag.toLowerCase();
+					if (
+						lowerTag === 'input' && key === 'value' ||
+						lowerTag === 'input' && key === 'checked' ||
+						lowerTag === 'option' && key === 'selected'
+					) {
+						if (this.#element.hasAttribute(key)) {
+							this.#element[key] = val;
+						}
+						else {
+							// 初期値の設定
+							this.#element.setAttribute(key, val);
 						}
 					}
 					// その他プロパティはそのまま設定する
