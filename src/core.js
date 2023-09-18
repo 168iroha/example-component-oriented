@@ -207,6 +207,12 @@ class StateNode {
 	get node() { return this; }
 
 	/**
+	 * このノードを構成する最小単位のノードを取得
+	 * @returns { StateNode | undefined }
+	 */
+	get atomicNode() { return this; }
+
+	/**
 	 * 子要素となるノードの取得
 	 * @returns { StateNode[] }
 	 */
@@ -227,71 +233,130 @@ class StateNode {
 
 	/**
 	 * 自要素を構築する(子要素は構築しない)
+	 * @param { HTMLElement | Text | undefined } target マウント対象のDOMノード
 	 */
-	buildCurrent() { throw new Error('not implemented.'); }
+	buildCurrent(target) { throw new Error('not implemented.'); }
 
 	/**
 	 * 子孫要素を構築する
 	 */
 	build() {
-		this.#ctx.lazy(() => {
-			/** @type { StateNode[] } コンポーネントについての幅優先探索に関するキュー */
-			const queueComponent = [this];
-			this.buildCurrent();
-			// コンポーネント生成に関するループ
-			while (queueComponent.length > 0) {
-				const component = queueComponent.shift();
-				/** ノードについての幅優先探索に関するキュー */
-				const queueNode = component.buildChild();
-				/** @type { StateNode[] } コンポーネント内のスコープにあるコンポーネントについての幅優先探索に関するキュー */
-				const queueLocalComponent = [];
-				console.log('start', component);
-				//  コンポーネント内のノード生成に関するループ
-				while (queueNode.length > 0) {
-					const node = queueNode.shift();
-					console.log(node);
-					if (node.node instanceof StateComponent) {
-						queueLocalComponent.push(node);
-					}
-					else {
-						node.buildCurrent();
-						queueNode.push(...node.buildChild());
-					}
-				}
-				queueComponent.push(...queueLocalComponent);
-				// コンポーネント内のコンポーネントの代表するDOMノードの生成
-				queueLocalComponent.forEach(c => c.buildCurrent());
-
-				// DOMノードの親子関係の決定
-				queueNode.push(component);
-				console.log('start2');
-				while (queueNode.length > 0) {
-					const node = queueNode.shift();
-					console.log(node);
-					for (const child of node.children) {
-						console.log('child', child);
-						if (child instanceof StateNode) {
-							node.element.appendChild(child.element);
-							if (!(child.node instanceof StateComponent)) {
-								queueNode.push(child);
-							}
-						}
-						else {
-							node.element.appendChild(child);
-						}
-					}
-				}
-			}
-		})();
+		this.#moutnImpl()();
 		return this;
 	}
 
 	/**
 	 * DOMノードにマウントする
-	 * @param { HTMLElement | Text } element
+	 * @param { HTMLElement | undefined } target マウント対象のDOMノード
 	 */
-	mount(element) {
-		// TODO
+	#moutnImpl(target) {
+		return this.#ctx.lazy(() => {
+			/** @type { [StateNode, HTMLElement | Text | undefined][] } コンポーネントについての幅優先探索に関するキュー */
+			const queueComponent = [[this, target]];
+
+			// コンポーネントの評価(ルートノードによってはコンポーネントではない場合もある)
+			if (this.atomicNode !== this) {
+				this.buildCurrent();
+			}
+			this.atomicNode.buildCurrent(target);
+
+			// コンポーネント生成に関するループ
+			while (queueComponent.length > 0) {
+				/** @type { [StateNode, HTMLElement | Text | undefined] } */
+				const [component, localRoot] = queueComponent.shift();
+				/** @type { [StateNode, HTMLElement | Text | undefined][] } ノードについての幅優先探索に関するキュー */
+				const queueNode = [[component.atomicNode, localRoot]];
+				/** @type { StateNode[] } コンポーネント内のスコープにあるコンポーネントについての幅優先探索に関するキュー */
+				const queueLocalComponent = [];
+				//  コンポーネント内のノード生成に関するループ
+				while (queueNode.length > 0) {
+					/** @type { [StateNode, HTMLElement | Text | undefined] } */
+					const [node, element] = queueNode.shift();
+					// 子要素の評価と取り出し
+					const childNodes = element?.childNodes ?? [];
+					const children = node.buildChild();
+					if (children.length > 0) {
+						// nodeに子が設定されているときはElementノード以外を削除
+						for (const childNode of childNodes) {
+							if (childNode.nodeType !== Node.ELEMENT_NODE) {
+								childNode.remove();
+							}
+						}
+					}
+					const useChildNodes = childNodes.length > 0;
+					let cnt = 0;
+					// 子要素の評価
+					for (const child of children) {
+						// 原子的なノードでなければノードを構築する
+						if (child.atomicNode !== child && !(child instanceof StateComponent)) {
+							child.buildCurrent();
+						}
+						const childNode = cnt < childNodes.length ? childNodes[cnt++] : undefined;
+						// ノードの比較を実施
+						if (child.node instanceof StateComponent) {
+							if (useChildNodes && !childNode) {
+								throw new Error('The number of nodes is insufficient.');
+							}
+							queueLocalComponent.push([child.node, childNode]);
+						}
+						else {
+							const atomicNode = child.atomicNode;
+							if (atomicNode instanceof StateTextNode) {
+								atomicNode.buildCurrent();
+								// テキストノードであれば挿入して補完する
+								if (useChildNodes) {
+									element.insertBefore(atomicNode.element, childNode);
+									++cnt;
+								}
+							}
+							else {
+								if (useChildNodes && !childNode) {
+									throw new Error('The number of nodes is insufficient.');
+								}
+								atomicNode.buildCurrent(childNode);
+								queueNode.push([child.atomicNode, childNode]);
+							}
+						}
+					}
+					// 子要素が多すぎたかの評価
+					if (useChildNodes && cnt < childNodes.length) {
+						throw new Error('The number of nodes is excessive.');
+					}
+				}
+				queueComponent.push(...queueLocalComponent);
+				// コンポーネント内のコンポーネントの代表するDOMノードの生成
+				queueLocalComponent.forEach(([c, e]) => {
+					c.buildCurrent();
+					c.atomicNode.buildCurrent(e);
+				});
+
+				// DOMノードの親子関係の決定
+				queueNode.push([component, localRoot]);
+				while (queueNode.length > 0) {
+					/** @type { [StateNode, HTMLElement | Text | undefined] } */
+					const [node, element] = queueNode.shift();
+					let childNode = element?.firstChild;
+					for (const child of node.children) {
+						// elementに子要素が存在しない場合にのみ子を追加する
+						if (!childNode) {
+							node.element.appendChild(child.element);
+						}
+						if (!(child.node instanceof StateComponent)) {
+							queueNode.push([child, childNode]);
+						}
+						childNode = childNode?.nextSibling;
+					}
+				}
+			}
+		});
+	}
+
+	/**
+	 * DOMノードにマウントする
+	 * @param { HTMLElement } target マウント対象のDOMノード
+	 */
+	mount(target) {
+		this.#moutnImpl(target)();
 	}
 }
 
@@ -335,8 +400,9 @@ class StateTextNode extends StateNode {
 
 	/**
 	 * 自要素を構築する(子要素は構築しない)
+	 * @param { HTMLElement | Text | undefined } target マウント対象のDOMノード
 	 */
-	buildCurrent() {}
+	buildCurrent(target) {}
 }
 
 /**
@@ -379,8 +445,30 @@ class StateHTMLElement extends StateNode {
 
 	/**
 	 * 自要素を構築する(子要素は構築しない)
+	 * @param { HTMLElement | Text | undefined } target マウント対象のDOMノード
 	 */
-	buildCurrent() {}
+	buildCurrent(target) {
+		// ノードのチェック
+		if (target) {
+			if (target instanceof Text) {
+				throw new Error('\'target\' must be an HTMLElement.');
+			}
+			else if (target.tagName.toLowerCase() !== this.#element.tagName.toLowerCase()) {
+				throw new Error(`'${target.tagName}' and '${this.#element.tagName}' cannot build a node because they have different tag names.`)
+			}
+
+			// 属性を移動
+			for (const attribute of target.attributes) {
+				if (!this.#element.hasAttribute(attribute.name)) {
+					this.#element.setAttribute(attribute.name, attribute.value);
+				}
+			}
+			// 親ノードが存在すれば置換
+			if (target.parentNode) {
+				target.parentNode.replaceChild(this.#element, target);
+			}
+		}
+	}
 }
 
 /**
@@ -450,13 +538,24 @@ class StateDomNode extends StateNode {
 
 	/**
 	 * 自要素を構築する(子要素は構築しない)
+	 * @param { HTMLElement | Text | undefined } target マウント対象のDOMノード
 	 */
-	buildCurrent() {
+	buildCurrent(target) {
+		// ノードのチェック
+		if (target) {
+			if (target instanceof Text) {
+				throw new Error('\'target\' must be an HTMLElement.');
+			}
+			else if (target.tagName.toLowerCase() !== this.#tag.toLowerCase()) {
+				throw new Error(`'${target.tagName}' and '${this.#tag}' cannot build a node because they have different tag names.`)
+			}
+		}
+
 		// 現在存在するノードの削除
 		this.remove();
 
 		// DOMノードの生成
-		this.#element = document.createElement(this.#tag);
+		this.#element = target ?? document.createElement(this.#tag);
 
 		// プロパティの設定
 		for (const key in this.#props) {
@@ -670,6 +769,12 @@ class StateComponent extends StateNode {
 	get element() { return this.#element?.element; }
 
 	/**
+	 * このノードを構成する最小単位のノードを取得
+	 * @returns { StateNode | undefined }
+	 */
+	get atomicNode() { return this.#element?.atomicNode; }
+
+	/**
 	 * 子要素となるノードの取得
 	 * @returns { StateNode[] }
 	 */
@@ -693,8 +798,9 @@ class StateComponent extends StateNode {
 
 	/**
 	 * 自要素を構築する(子要素は構築しない)
+	 * @param { HTMLElement | Text | undefined } target マウント対象のDOMノード
 	 */
-	buildCurrent() {
+	buildCurrent(target) {
 		// 現在存在するノードの削除
 		this.remove();
 
@@ -739,7 +845,9 @@ class StateComponent extends StateNode {
 		}
 
 		// コンポーネントのルートノードの評価
-		this.#element.buildCurrent();
+		if (this.#element.atomicNode !== this.#element && !(this.#element instanceof StateComponent)) {
+			this.#element.buildCurrent();
+		}
 	}
 
 	/**
@@ -814,8 +922,6 @@ class StateChooseNode extends StateNode {
 	#caller = undefined;
 	/** @type { StateNode | undefined } 現在表示しているノード */
 	#currentNode = undefined;
-	/** @type { boolean } 子要素が構築されたことがあるかを示すフラグ */
-	#genChildFlag = false;
 
 	/**
 	 * コンストラクタ
@@ -841,8 +947,14 @@ class StateChooseNode extends StateNode {
 	 * このノードを代表するノードの取得
 	 * @returns { StateNode | undefined }
 	 */
-	get node() { return this.#currentNode; }
+	get node() { return this.#currentNode?.node; }
 
+	/**
+	 * このノードを構成する最小単位のノードを取得
+	 * @returns { StateNode | undefined }
+	 */
+	get atomicNode() { return this.#currentNode?.atomicNode; }
+	
 	/**
 	 * 子要素となるノードの取得
 	 * @returns { StateNode[] }
@@ -863,14 +975,14 @@ class StateChooseNode extends StateNode {
 	 * @returns { StateNode[] }
 	 */
 	buildChild() {
-		this.#genChildFlag = true;
 		return this.#currentNode?.buildChild?.() ?? [];
 	}
 
 	/**
 	 * 自要素を構築する(子要素は構築しない)
+	 * @param { HTMLElement | Text | undefined } target マウント対象のDOMノード
 	 */
-	buildCurrent() {
+	buildCurrent(target) {
 		// 現在存在するノードの削除
 		this.remove();
 
@@ -883,15 +995,12 @@ class StateChooseNode extends StateNode {
 			// 表示する要素が存在しないときは代わりにプレースホルダとして空のTextを表示
 			this.#currentNode = nodeList.length > 0 ? nodeList[0] : new StateTextNode(this.ctx, document.createTextNode(''), []);
 			// 子要素が構築されたことある場合は構築する
-			if (this.#genChildFlag) {
-				this.#currentNode.build();
-			}
-			else {
-				this.#currentNode.buildCurrent();
-			}
-			// 親が存在するならノードを挿入する
 			if (parent) {
+				this.#currentNode.build();
 				parent.insertBefore(this.element, nextSibling);
+			}
+			else if (this.#currentNode.atomicNode !== this.#currentNode && !(this.#currentNode instanceof StateComponent)) {
+				this.#currentNode.buildCurrent();
 			}
 		});
 	}
@@ -1181,107 +1290,13 @@ class Context {
 	 * @returns { K extends string ? StateDomNode<K> : StateComponent<K> }
 	 */
 	$(tag, props = {}, children = () => []) {
-		/** @type { { caller: CallerType; states: State<unknown>[] }[] } このDOMノード内での外部からの状態変数の呼び出し元情報のリスト */
-		//const callerList = [];
-
 		// HTMLタグによるDOMノードの生成(Web Componentsも含む)
 		if (typeof tag === 'string') {
 			return new StateDomNode(this, tag, props, children);
-			// const element = document.createElement(tag);
-			// const stateElement = new StateDomNode(this, element, children, callerList);
-
-			// // プロパティの設定
-			// for (const key in props) {
-			// 	const val = props[key];
-			// 	if (val !== undefined && val !== null && val !== false) {
-			// 		const caller = this.setParam(val, val => {
-			// 			// styleはオブジェクト型による設定を許容するため処理を特殊化
-			// 			if (key === 'style') {
-			// 				if (val !== undefined && val !== null && val !== false) {
-			// 					for (const styleKey in val) {
-			// 						const caller = this.setParam(val[styleKey], val => element.style[styleKey] = val ?? '');
-			// 						if (caller && caller.states.length > 0) callerList.push(caller);
-			// 					}
-			// 				}
-			// 				else {
-			// 					element.removeAttribute('style');
-			// 				}
-			// 			}
-			// 			// その他プロパティはそのまま設定する
-			// 			else {
-			// 				element[key] = val ?? '';
-			// 			}
-			// 		});
-			// 		if (caller && caller.states.length > 0) callerList.push(caller);
-			// 	}
-			// }
-
-			// const caller2 = this.setParam(children(), val => {
-			// 	const nodeList = this.normalizeCtxChild(val);
-			// 	stateElement.replace(nodeList);
-			// });
-			// if (caller2 && caller2.states.length > 0) callerList.push(caller2);
-
-			// return stateElement;
 		}
 		// コンポーネントによるDOMノード生成
 		else {
 			return new StateComponent(this, tag, props, children);
-			// // WebComponentプロパティの検査
-			// if (tag?.webComponent?.name && !this.#componentMap.has(tag)) {
-			// 	this.defineWebComponent(tag.webComponent.name, tag, tag.webComponent?.shadow ?? false, tag.webComponent?.options);
-			// }
-
-			// // コンポーネントから定義されたWeb ComponentによるDOMノードの生成
-			// if (this.#componentMap.has(tag)) {
-			// 	const element = document.createElement(this.#componentMap.get(tag));
-			// 	return element.createStateComponent(props, children);
-			// }
-			// // 通常のDOMノードの生成
-			// else {
-			// 	/** @type { CompPropTypes<K> } コンポーネントに渡すプロパティ */
-			// 	const compProps = {};
-			// 	for (const key in tag.propTypes ?? {}) {
-			// 		const val = props[key];
-			// 		// 渡されたプロパティが状態変数なら単方向データに変換して渡すようにする
-			// 		if (val instanceof State || val instanceof Computed) {
-			// 			const s = new State(val.value, val instanceof State ? val.ctx : this);
-			// 			const caller = this.unidirectional(val, s);
-			// 			if (caller && caller.states.length > 0) callerList.push(caller);
-			// 			compProps[key] = s;
-			// 		}
-			// 		else {
-			// 			// 値が与えられなかった場合はデフォルト値から持ってくる
-			// 			const val2 = val === undefined || val === null || val === false ? tag.propTypes[key] : val;
-			// 			if (val2 !== undefined && val2 !== null && val2 !== false) {
-			// 				compProps[key] = new State(val2, this);
-			// 			}
-			// 		}
-			// 	}
-			// 	/** @type { CompChildType } コンポーネントに渡す子要素 */
-			// 	const compChild = () => {
-			// 		const nodeList = children();
-			// 		const stateNodeList = new State([], nodeList instanceof State ? nodeList.ctx : this);
-			// 		if (nodeList instanceof State || nodeList instanceof Computed) {
-			// 			// 呼び出し元情報の取得は不要
-			// 			this.unidirectional(nodeList, stateNodeList, v => this.normalizeCtxChild(v));
-			// 			if (caller && caller.states.length > 0) callerList.push(caller);
-			// 		}
-			// 		else {
-			// 			stateNodeList.org = this.normalizeCtxChild(nodeList);
-			// 		}
-			// 		return stateNodeList;
-			// 	};
-
-			// 	const element = tag(this, compProps, compChild);
-			// 	if (element instanceof StateNode) {
-			// 		return new StateComponent(this, element, {}, callerList);
-			// 	}
-			// 	else {
-			// 		const exposeStates = element.exposeStates ?? {};
-			// 		return new StateComponent(this, element.node, exposeStates, callerList);
-			// 	}
-			// }
 		}
 	}
 
@@ -1318,6 +1333,15 @@ class Context {
 			return result + strs[strs.length - 1];
 		};
 		return useStateFlag ? computed(f) : f();
+	}
+
+	/**
+	 * HTMLElementを示すStateNodeの生成
+	 * @param { HTMLElement } element StateNodeの生成対象
+	 * @param { { caller: CallerType; states: State<unknown>[] }[] } callerList 呼び出し元のリスト
+	 */
+	html(element, callerList = []) {
+		return new StateHTMLElement(this, element, callerList);
 	}
 
 	/**
