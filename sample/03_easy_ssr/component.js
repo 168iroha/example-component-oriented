@@ -18,7 +18,7 @@ import { Context, computed } from "../../src/core.js";
  */
 function CountButton(ctx, props, children) {
 	// 雑に同じボタンを3つ設置する
-	return ctx.$('div', {}, () => [
+	return ctx.$('div', [
 		ctx.$('button', { onclick: () => props.onclick.value() }, children),
 		ctx.$('button', { onclick: () => props.onclick.value() }, children),
 		ctx.$('button', { onclick: () => props.onclick.value() }, children),
@@ -40,7 +40,7 @@ function DualInput(ctx) {
 
 	return {
 		// ノードの定義
-		node: ctx.$('div', {}, () => [
+		node: ctx.$('div', [
 			ctx.$('input', { value: '初期値1' }).observe({ value: input1 }),
 			ctx.$('input', { value: '初期値2' }).observe({ value: input2 }),
 		]),
@@ -63,20 +63,20 @@ function Main(ctx, props, children) {
 	const cnt = ctx.useState(props.init.value);
 	const input = ctx.useState('');
 
-	return ctx.$('div', {}, () => [
-		ctx.$(CountButton, { onclick: () => ++cnt.value }, () => [
+	return ctx.$('div', [
+		ctx.$(CountButton, { onclick: () => ++cnt.value }, [
 			ctx.t`Count is: ${cnt}`
 		]),
 		ctx.$('hr'),
-		ctx.$('div', {}, () => [
+		ctx.$('div', [
 			ctx.t`Count×2 is: ${() => cnt.value * 2}`,
 			ctx.choose({}, cnt, cnt => {
 				if (cnt % 2 === 0) {
-					return ctx.$('div', { style: { color: 'red' } }, () => [ctx.t`Cnt is even.`]);
+					return ctx.$('div', { style: { color: 'red' } }, [ctx.t`Cnt is even.`]);
 				}
 			}),
 		]),
-		ctx.$('div', {}, () => [
+		ctx.$('div', [
 			ctx.$(DualInput).observe({ value: input }),
 			ctx.t`Input Text is: ${input}`
 		])
