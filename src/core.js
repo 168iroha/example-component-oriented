@@ -17,8 +17,8 @@ class State {
 	#callerList = new Set();
 	/** @type { Context } 状態変数の扱っているコンテキスト */
 	#ctx;
-	/** @type { ((val: State<T>) => unknown) | undefined } 参照の追加時に発火されるイベントハンドラ */
-	onreference = undefined;
+	/** @type { ((val: State<T>) => boolean) | undefined | false } 状態変数の参照が存在しだしたタイミングに1度のみ呼びだされるイベントのハンドラ */
+	#onreference = undefined;
 
 	/**
 	 * コンストラクタ
@@ -69,6 +69,86 @@ class State {
 	 * 状態変数の参照カウントを得る
 	 */
 	get count() { return this.#callerList.size; }
+
+	/**
+	 * 状態変数の参照が存在しだしたタイミングに1度のみ呼びだされるイベントの設定
+	 * @param { (val: State<T>) => unknown } callback イベントハンドラ
+	 */
+	set onreference(callback) {
+		/**
+		 * #onreference2の形式の関数
+		 * @param { State<T> } s
+		 */
+		const c = s => {
+			s.#onreference = false;
+			callback(s);
+			return true;
+		};
+		if ((!this.#onreference && this.count > 0) || (this.#onreference && this.#onreference(this))) {
+			c(this);
+		}
+		else {
+			this.#onreference = c;
+		}
+	}
+
+	/**
+	 * 状態変数の参照が存在しだしたタイミングに1度のみ呼びだされるイベントハンドラの取得
+	 */
+	get onreference() {
+		return this.#onreference;
+	}
+
+	/**
+	 * propの観測(onreferenceの連鎖的な追跡も実施する)
+	 * @param { CtxValueType<T> } prop 観測対象の変数
+	 */
+	observe(prop) {
+		// 複数対象を観測等してはならない
+		if (this.#onreference !== undefined) {
+			throw new Error('State variables are already used for observation.');
+		}
+
+		if (prop instanceof State || prop instanceof Computed) {
+			this.ctx.unuseReferenceCheck(() => {
+				const caller = this.ctx.unidirectional(prop, this);
+				// state.onreferenceなしでstateが1つ以上の参照をもつ(親への状態の伝播なしで状態の参照が存在する場合)
+				// もしくはstate.onreferenceなしでstateが2つ以上の参照をもつ(親への状態の伝播ありで状態の参照が存在する場合)
+				// もしくはonreference()の戻り値がtrue(親への状態の伝播ありで祖先で状態の参照が存在する場合)
+				// の場合に状態変数は利用されている
+				const flag = (!this.#onreference && this.count > 0) || (this.#onreference && this.#onreference(this));
+				try {
+					caller.states.forEach(s => {
+						if (s.#onreference !== undefined) {
+							throw new Error('State variables are already used for observation.');
+						}
+						s.#onreference = s2 => {
+							s2.#onreference = false;
+							return flag;
+						};
+					});
+				}
+				catch (e) {
+					// 状態変数の関連付けを解除してリスロー
+					caller.states.forEach(s => s.delete(caller.caller));
+					throw e;
+				}
+				// このタイミングで値が利用されていない際はchoose()などで後から利用される可能性があるため
+				// 後から通知を行うことができるようにする
+				if (!flag) {
+					// 関連付けられた状態変数のonreferenceを連鎖的に呼び出す
+					this.#onreference = s => {
+						s.#onreference = false;
+						caller.states.forEach(state => state.#onreference?.(state));
+						return false;
+					};
+				}
+			});
+		}
+		else {
+			this.value = prop;
+		}
+	}
 }
 
 /**
@@ -841,13 +921,7 @@ class GenStateDomNode extends GenStateNode {
 				/** @type { State<unknown> | undefined } */
 				const state = props[name];
 				if (state) {
-					const c = callback(name);
-					if ((!state.onreference && state.count > 0) || (state.onreference && state.onreference(state))) {
-						c(state);
-					}
-					else {
-						state.onreference = c;
-					}
+					state.onreference = callback(name);
 				}
 			}
 		};
@@ -866,8 +940,6 @@ class GenStateDomNode extends GenStateNode {
 			 * @returns { (state: State<unknown>) => void }
 			 */
 			const callbackEventListener = key => state => {
-				state.onreference = undefined;
-				
 				// 初回呼び出し時にのみイベントを設置する
 				if (callbackEventListenerFlag) {
 					callbackEventListenerFlag = !callbackEventListenerFlag;
@@ -885,7 +957,6 @@ class GenStateDomNode extends GenStateNode {
 				}
 				// 初期値の伝播
 				state.value = element[key];
-				return true;
 			};
 
 			// 状態の監視の設定
@@ -1113,37 +1184,8 @@ class GenStateComponent extends GenStateNode {
 		for (const key in props) {
 			const state = props[key];
 			const exposeState = exposeStates[key];
-			// 状態変数の場合は単方向の関連付けを実施
-			if (exposeState instanceof State || exposeState instanceof Computed) {
-				this.ctx.unuseReferenceCheck(() => {
-					const callerList = this.ctx.unidirectional(exposeState, state);
-					// state.onreferenceなしでstateが1つ以上の参照をもつ(親への状態の伝播なしで状態の参照が存在する場合)
-					// もしくはstate.onreferenceなしでstateが2つ以上の参照をもつ(親への状態の伝播ありで状態の参照が存在する場合)
-					// もしくはonreference()の戻り値がtrue(親への状態の伝播ありで祖先で状態の参照が存在する場合)
-					// の場合に状態変数は利用されている
-					const flag = (!state.onreference && state.count > 0) || (state.onreference && state.onreference(state));
-					callerList.states.forEach(s => {
-						s.onreference = s2 => {
-							s2.onreference = undefined;
-							return flag;
-						};
-					});
-					// このタイミングで値が利用されていない際はchoose()などで後から利用される可能性があるため
-					// 後から通知を行うことができるようにする
-					if (!flag) {
-						// 関連付けられた状態変数のonreferenceを連鎖的に呼び出す
-						state.onreference = s => {
-							s.onreference = undefined;
-							callerList.states.forEach(state => state.onreference?.(state));
-							return false;
-						};
-					}
-				});
-			}
-			// 状態変数でない場合はそのまま設定
-			else {
-				state.value = exposeState;
-			}
+			// 状態の観測の実施
+			state.observe(exposeState);
 		}
 	}
 }
