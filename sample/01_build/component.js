@@ -1,4 +1,4 @@
-import { Context, computed } from "../../src/core.js";
+import { Context } from "../../src/core.js";
 
 /**
  * @template T

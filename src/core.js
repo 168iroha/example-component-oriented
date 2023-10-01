@@ -11,23 +11,23 @@
  * @template T
  */
 class State {
+	/** @type { Context } 状態変数の扱っているコンテキスト */
+	#ctx;
 	/** @type { T } 状態変数の本体 */
 	#value;
 	/** @type { Set<CallerType> } 呼び出し元のハンドラのリスト */
 	#callerList = new Set();
-	/** @type { Context } 状態変数の扱っているコンテキスト */
-	#ctx;
-	/** @type { ((val: State<T>) => boolean) | undefined | false } 状態変数の参照が存在しだしたタイミングに1度のみ呼びだされるイベントのハンドラ */
+	/** @type { ((val: State<T>) => boolean) | undefined | boolean } 状態変数の参照が存在しだしたタイミングに1度のみ呼びだされるイベントのハンドラ */
 	#onreference = undefined;
 
 	/**
 	 * コンストラクタ
-	 * @param { T } value 状態変数の初期値
 	 * @param { Context } ctx 状態変数を扱っているコンテキスト
+	 * @param { T } value 状態変数の初期値
 	 */
-	constructor(value, ctx) {
-		this.#value = value;
+	constructor(ctx, value) {
 		this.#ctx = ctx;
+		this.#value = value;
 	}
 
 	get value() {
@@ -76,15 +76,15 @@ class State {
 	 */
 	set onreference(callback) {
 		/**
-		 * #onreference2の形式の関数
+		 * #onreferenceの形式の関数
 		 * @param { State<T> } s
 		 */
 		const c = s => {
-			s.#onreference = false;
+			s.#onreference = true;
 			callback(s);
 			return true;
 		};
-		if ((!this.#onreference && this.count > 0) || (this.#onreference && this.#onreference(this))) {
+		if ((typeof this.#onreference === 'boolean') ? this.#onreference : (!this.#onreference && this.count > 0) || (this.#onreference && this.#onreference(this))) {
 			c(this);
 		}
 		else {
@@ -101,47 +101,49 @@ class State {
 
 	/**
 	 * propの観測(onreferenceの連鎖的な追跡も実施する)
-	 * @param { CtxValueType<T> } prop 観測対象の変数
+	 * @param { CtxValueType<T> | () => T } prop 観測対象の変数
 	 */
 	observe(prop) {
-		// 複数対象を観測等してはならない
-		if (this.#onreference !== undefined) {
-			throw new Error('State variables are already used for observation.');
-		}
-
-		if (prop instanceof State || prop instanceof Computed) {
+		if (prop instanceof State || prop instanceof Computed || prop instanceof Function) {
 			this.ctx.unuseReferenceCheck(() => {
 				const caller = this.ctx.unidirectional(prop, this);
 				// state.onreferenceなしでstateが1つ以上の参照をもつ(親への状態の伝播なしで状態の参照が存在する場合)
 				// もしくはstate.onreferenceなしでstateが2つ以上の参照をもつ(親への状態の伝播ありで状態の参照が存在する場合)
 				// もしくはonreference()の戻り値がtrue(親への状態の伝播ありで祖先で状態の参照が存在する場合)
 				// の場合に状態変数は利用されている
-				const flag = (!this.#onreference && this.count > 0) || (this.#onreference && this.#onreference(this));
-				try {
-					caller.states.forEach(s => {
-						if (s.#onreference !== undefined) {
-							throw new Error('State variables are already used for observation.');
-						}
+				const flag = (typeof this.#onreference === 'boolean') ? this.#onreference : (!this.#onreference && this.count > 0) || (this.#onreference && this.#onreference(this));
+				caller.states.forEach(s => {
+					// 1つの状態を複数の状態変数が観測できるようにする
+					if (!s.#onreference) {
 						s.#onreference = s2 => {
-							s2.#onreference = false;
+							s2.#onreference = flag;
 							return flag;
 						};
-					});
-				}
-				catch (e) {
-					// 状態変数の関連付けを解除してリスロー
-					caller.states.forEach(s => s.delete(caller.caller));
-					throw e;
-				}
+					}
+				});
 				// このタイミングで値が利用されていない際はchoose()などで後から利用される可能性があるため
 				// 後から通知を行うことができるようにする
 				if (!flag) {
 					// 関連付けられた状態変数のonreferenceを連鎖的に呼び出す
 					this.#onreference = s => {
-						s.#onreference = false;
-						caller.states.forEach(state => state.#onreference?.(state));
+						s.#onreference = true;
+						caller.states.forEach(state => {
+							if (state.#onreference instanceof Function) {
+								state.#onreference(state);
+							}
+							state.#onreference = true;
+						});
 						return false;
 					};
+				}
+				// 参照ありでonreferenceが呼び出し済みなら関連付けられた状態変数のonreferenceを連鎖的に呼び出す
+				else {
+					caller.states.forEach(state => {
+						if (state.#onreference instanceof Function) {
+							state.#onreference(state);
+						}
+						state.#onreference = true;
+					});
 				}
 			});
 		}
@@ -156,18 +158,22 @@ class State {
  * @template T
  */
 class Computed {
-	/** @type { () => T } 算出プロパティを計算する関数 */
-	#f;
+	/** @type { State<T> } 状態変数 */
+	#state;
 
 	/**
 	 * コンストラクタ
+	 * @param { Context } ctx 状態変数を扱っているコンテキスト
 	 * @param { () => T } f 算出プロパティを計算する関数
 	 */
-	constructor(f) {
-		this.#f = f;
+	constructor(ctx, f) {
+		this.#state = new State(ctx, undefined);
+		this.#state.observe(f);
 	}
 
-	get value() { return this.#f(); }
+	get value() { return this.#state.value; }
+
+	get ctx() { return this.#state.ctx; }
 }
 
 /**
@@ -1119,7 +1125,7 @@ class GenStateComponent extends GenStateNode {
 			const val = this.#props[key];
 			// 渡されたプロパティが状態変数なら単方向データに変換して渡すようにする
 			if (val instanceof State || val instanceof Computed) {
-				const s = new State(val.value, val instanceof State ? val.ctx : this.ctx);
+				const s = new State(val.ctx, val.value);
 				const caller = this.ctx.unidirectional(val, s);
 				if (caller && caller.states.length > 0) callerList.push(caller);
 				compProps[key] = s;
@@ -1128,7 +1134,7 @@ class GenStateComponent extends GenStateNode {
 				// 値が与えられなかった場合はデフォルト値から持ってくる
 				const val2 = val === undefined || val === null || val === false ? this.#component.propTypes[key] : val;
 				if (val2 !== undefined && val2 !== null && val2 !== false) {
-					compProps[key] = new State(val2, this.ctx);
+					compProps[key] = new State(this.ctx, val2);
 				}
 			}
 		}
@@ -1480,7 +1486,7 @@ class Context {
 	 */
 	notify(state) {
 		if (this.#stack.length > 0) {
-			if (this.#checkReference[this.#checkReference.length - 1] && state.onreference) {
+			if (this.#checkReference[this.#checkReference.length - 1] && state.onreference instanceof Function) {
 				// 参照追加に関するイベントの発火
 				state.onreference(state);
 			}
@@ -1495,29 +1501,52 @@ class Context {
 	 * @returns { State<T> }
 	 */
 	useState(value) {
-		return new State(value, this);
+		return new State(this, value);
+	}
+
+	/**
+	 * 算出プロパティの宣言
+	 * @template T
+	 * @param { () => T } f 算出プロパティを計算する関数
+	 * @returns { Computed<T> }
+	 */
+	computed(f) {
+		return new Computed(this, f);
 	}
 
 	/**
 	 * 単方向データの作成
 	 * @template T, U
-	 * @param { State<T> | Computed<T> } src 作成元のデータ
+	 * @param { State<T> | Computed<T> | () => T } src 作成元のデータ
 	 * @param { State<U> } dest 作成対象のデータ
 	 * @param { (from: T) => U } trans 変換関数
 	 * @returns { { caller: CallerType; states: State<unknown>[] } } 呼び出し元情報
 	 */
 	unidirectional(src, dest, trans = x => x) {
-		const ctx = src instanceof State ? src.ctx : this;
+		const ctx = src instanceof Function ? this : src.ctx;
 		let circuit = false;
-		return ctx.call(() => {
-			// srcの変更で必ず発火させつつ
-			// destの変更およびsrc = destな操作で発火および循環させない
-			if (!circuit) {
-				circuit = true;
-				dest.value = trans(src.value);
-				circuit = false;
-			}
-		});
+		if (src instanceof Function) {
+			return ctx.call(() => {
+				// srcの変更で必ず発火させつつ
+				// destの変更およびsrc = destな操作で発火および循環させない
+				if (!circuit) {
+					circuit = true;
+					dest.value = trans(src());
+					circuit = false;
+				}
+			});
+		}
+		else {
+			return ctx.call(() => {
+				// srcの変更で必ず発火させつつ
+				// destの変更およびsrc = destな操作で発火および循環させない
+				if (!circuit) {
+					circuit = true;
+					dest.value = trans(src.value);
+					circuit = false;
+				}
+			});
+		}
 	}
 
 	/**
@@ -1541,8 +1570,7 @@ class Context {
 	setParam(val, setter, label = undefined) {
 		// 状態変数の場合は変更を監視
 		if (val instanceof State || val instanceof Computed) {
-			const ctx = val instanceof State ? val.ctx : this;
-			return ctx.call({ caller: () => setter(val.value), label });
+			return val.ctx.call({ caller: () => setter(val.value), label });
 		}
 		// 状態変数でない場合はそのまま設定
 		else {
@@ -1660,7 +1688,7 @@ class Context {
 			});
 			return result + strs[strs.length - 1];
 		};
-		return useStateFlag ? computed(f) : f();
+		return useStateFlag ? this.computed(f) : f();
 	}
 
 	/**
@@ -1682,16 +1710,6 @@ class Context {
 	choose(props, val, callback) {
 		return new GenStateChooseNode(this, props, val, callback);
 	}
-}
-
-/**
- * 算出プロパティの宣言
- * @template T
- * @param { () => T } f 算出プロパティを計算する関数
- * @returns { Computed<T> }
- */
-function computed(f) {
-	return new Computed(f);
 }
 
 /**
@@ -1720,7 +1738,7 @@ function computed(f) {
  */
 function watch(state, f, ctx = undefined) {
 	const ctx2 = ctx || new Context();
-	const trigger = new State(-1, ctx2);
+	const trigger = new State(ctx2, -1);
 	const caller = () => { trigger.value = trigger.value % 2 + 1; };
 
 	if (state instanceof State) {
@@ -1763,4 +1781,4 @@ function watch(state, f, ctx = undefined) {
 	}
 }
 
-export { State, Context, computed, watch };
+export { State, Context, watch };
