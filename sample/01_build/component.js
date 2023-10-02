@@ -70,11 +70,9 @@ function Main(ctx, props, children) {
 		ctx.$('hr'),
 		ctx.$('div', [
 			ctx.t`Count×2 is: ${() => cnt.value * 2}`,
-			ctx.choose({}, cnt, cnt => {
-				if (cnt % 2 === 0) {
-					return ctx.$('div', { style: { color: 'red' } }, [ctx.t`Cnt is even.`]);
-				}
-			}),
+			ctx.choose({}, cnt, [
+				[cnt => cnt % 2 === 0, ctx.$('div', { style: { color: 'red' } }, [ctx.t`Cnt is even.`])]
+			])
 		]),
 		ctx.$('div', [
 			ctx.$(DualInput).observe({ value: input }),

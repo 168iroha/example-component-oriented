@@ -19,6 +19,7 @@ class CallerLabel {
 
 /**
  * DOM更新のためのCallerTypeに対するラベルの型
+ * @extends { CallerLabel }
  */
 class DomUpdateCallerLabel {
 	/** @type { StateNode } 更新対象となるStateNode(コンポーネント) */
@@ -254,6 +255,11 @@ class Computed {
 
 	get ctx() { return this.#state.ctx; }
 }
+
+/**
+ * @template T
+ * @typedef { T extends State<infer U1> ? U1 : T extends Computed<infer U2> ? U2 : T } ElementTypeOfState 状態変数の要素型を得る
+ */
 
 /**
  * @template { string } K
@@ -1336,7 +1342,7 @@ class GenStateComponent extends GenStateNode {
 
 /**
  * @template T
- * @typedef { (val: T extends State<infer U1> ? U1 : T extends Computed<infer U2> ? U2 : T) => (StateNode | HTMLElement | Text | CtxValueType<string> | false | null | undefined) } CallbackStateChooseNode StateChooseNodeで用いるコールバック
+ * @typedef { ([(val: ElementTypeOfState<T>) => boolean, GenStateNode | (val: ElementTypeOfState<T>) => GenStateNode] | [GenStateNode | (val: ElementTypeOfState<T>) => GenStateNode])[] } StateChooseNodeChildType StateChooseNodeで用いる子要素の型
  */
 
 /**
@@ -1352,6 +1358,8 @@ class StateChooseNode extends StateNode {
 	#caller = undefined;
 	/** @type { StateNode | undefined } 現在表示しているノード */
 	#currentNode = undefined;
+	/** @type { number } 前回選択した要素のインデックス */
+	#prevChooseIndex = -1;
 
 	/**
 	 * コンストラクタ
@@ -1359,10 +1367,10 @@ class StateChooseNode extends StateNode {
 	 * @param { StateNode | undefined } stateNode ノードを生成する場所
 	 * @param { {} } props chooseについてのプロパティ(現在はなし)
 	 * @param { T } val 表示対象を切り替える基準となる変数
-	 * @param { CallbackStateChooseNode<T> } callback valからDOMノードを選択する関数
+	 * @param { StateChooseNodeChildType<T> } children valからDOMノードを選択するオブジェクト
 	 * @param { { gen?: GenStateNode; children?: GenStateNode[] } } result ノードの生成結果を示すオブジェクト
 	 */
-	constructor(ctx, stateNode, props, val, callback, result) {
+	constructor(ctx, stateNode, props, val, children, result) {
 		super(ctx, []);
 		this.#stateNode = stateNode || this;
 		this.#props = props;
@@ -1373,28 +1381,27 @@ class StateChooseNode extends StateNode {
 				const parent = element.parentElement;
 				const nextSibling = element.nextElementSibling;
 				const prevNode = this.#currentNode;
-				const nodeList = this.ctx.normalizeCtxChild([callback(val)]);
 				// 表示する要素が存在しないときは代わりにプレースホルダとして空のTextを表示
-				const genStateNode = nodeList.length > 0 ? nodeList[0] : new GenStateTextNode(this.ctx, '');
+				const genStateNode = this.#chooseNode(val, children);
 
-				// ノードを構築
-				this.#currentNode = genStateNode.build(this.#stateNode);
-				// 初期表示以降はDOMの更新する関数を通して構築する
-				const insertElement = this.element;
-				this.ctx.updateStateDom(() => {
-					prevNode?.remove();
-					parent.insertBefore(insertElement, nextSibling);
-				}, this.#stateNode);
+				if (genStateNode) {
+					// ノードを構築
+					this.#currentNode = genStateNode.build(this.#stateNode);
+					// 初期表示以降はDOMの更新する関数を通して構築する
+					const insertElement = this.element;
+					this.ctx.updateStateDom(() => {
+						prevNode?.remove();
+						parent.insertBefore(insertElement, nextSibling);
+					}, this.#stateNode);
+				}
 			}
 		});
 		if (caller) {
 			this.callerList.push(caller);
 		}
 
-		// 初期表示の設定
-		const nodeList = this.ctx.normalizeCtxChild([callback(this.ctx.useParam(val))]);
-		// 表示する要素が存在しないときは代わりにプレースホルダとして空のTextを表示
-		const genStateNode = nodeList.length > 0 ? nodeList[0] : new GenStateTextNode(this.ctx, '');
+		// 初期表示の設定(初期表示はgenStateNodeはundefined)
+		const genStateNode = this.#chooseNode(this.ctx.useParam(val), children);
 
 		if (!genStateNode.isAtomic && !(genStateNode instanceof GenStateComponent)) {
 			({ gen: result.gen, children: result.children } = genStateNode.buildCurrent(this.#stateNode));
@@ -1403,6 +1410,54 @@ class StateChooseNode extends StateNode {
 			result.gen = new GetGenStateNode(genStateNode, node => this.#currentNode = node);
 			result.children = [];
 		}
+	}
+
+	/**
+	 * childrenからノードを選択する
+	 * @param { ElementTypeOfState<T> } val 表示対象を切り替える基準となる変数
+	 * @param { StateChooseNodeChildType<T> } children valからDOMノードを選択するオブジェクト
+	 */
+	#chooseNode(val, children) {
+		/** @type { [] | [GenStateNode] } */
+		let nodeList = [];
+		let i = 0
+		let genStateNodeFlag = false;
+		for (; i < children.length; ++i) {
+			const child = children[i];
+			// 条件式が設定されていない場合
+			if (child.length === 1) {
+				const c = child[0];
+				genStateNodeFlag = c instanceof GenStateNode;
+				nodeList = this.ctx.normalizeCtxChild([genStateNodeFlag ? c : c()]);
+				break;
+			}
+			// 条件式が設定されている場合
+			if (child[0](val)) {
+				const c = child[1];
+				genStateNodeFlag = c instanceof GenStateNode;
+				nodeList = this.ctx.normalizeCtxChild([genStateNodeFlag ? c : c()]);
+				break;
+			}
+		}
+		// ノードが選択されなかった場合はインデックスを-1に統一
+		if (nodeList.length === 0) {
+			i = -1;
+		}
+
+		// 選択したノードに変化があるもしくは関数により生成された場合は新規ノードを生成
+		if (i !== this.#prevChooseIndex || !genStateNodeFlag) {
+			this.#prevChooseIndex = i;
+			if (i === -1) {
+				// 表示する要素が存在しないときは代わりにプレースホルダとして空のTextを表示
+				return new GenStateTextNode(this.ctx, '');
+			}
+			return nodeList[0];
+		}
+		else if (!this.#currentNode) {
+			// 表示する要素が存在しないときは代わりにプレースホルダとして空のTextを表示
+			return new GenStateTextNode(this.ctx, '');
+		}
+		return undefined;
 	}
 
 	/**
@@ -1430,21 +1485,21 @@ class GenStateChooseNode extends GenStateNode {
 	#props;
 	/** @type { T } 表示対象を切り替える基準となる変数 */
 	#val;
-	/** @type { CallbackStateChooseNode<T> } valからDOMノードを選択する関数 */
-	#callback;
+	/** @type { StateChooseNodeChildType<T> } valからDOMノードを選択するオブジェクト */
+	#children;
 
 	/**
 	 * コンストラクタ
 	 * @param { Context } ctx StateNodeを生成するコンテキスト
 	 * @param { {} } props chooseについてのプロパティ(現在はなし)
 	 * @param { T } val 表示対象を切り替える基準となる変数
-	 * @param { CallbackStateChooseNode<T> } callback valからDOMノードを選択する関数
+	 * @param { StateChooseNodeChildType<T> } children valからDOMノードを選択するオブジェクト
 	 */
-	constructor(ctx, props, val, callback) {
+	constructor(ctx, props, val, children) {
 		super(ctx);
 		this.#props = props;
 		this.#val = val;
-		this.#callback = callback;
+		this.#children = children;
 	}
 
 	/**
@@ -1452,7 +1507,7 @@ class GenStateChooseNode extends GenStateNode {
 	 * @returns { GenStateChooseNode }
 	 */
 	clone() {
-		return new GenStateChooseNode(this.ctx, this.#props, this.#val, this.#callback);
+		return new GenStateChooseNode(this.ctx, this.#props, this.#val, this.#children);
 	}
 
 	/**
@@ -1465,7 +1520,7 @@ class GenStateChooseNode extends GenStateNode {
 		/** @type { { gen?: GenStateNode; children?: GenStateNode[] } } */
 		const result = {};
 		// atomicでないノードを生成してresultの情報を返す
-		const node = new StateChooseNode(this.ctx, stateNode, { ...this.#props }, this.#val, this.#callback, result);
+		const node = new StateChooseNode(this.ctx, stateNode, { ...this.#props }, this.#val, this.#children, result);
 		return { node, gen: result.gen, children: result.children };
 	}
 }
@@ -1856,11 +1911,11 @@ class Context {
 	 * @template T
 	 * @param { {} } props chooseについてのプロパティ(現在はなし)
 	 * @param { T } val 表示対象を切り替える基準となる変数
-	 * @param { CallbackStateChooseNode<T> } callback valからDOMノードを選択する関数
+	 * @param { StateChooseNodeChildType<T> } children valからDOMノードを選択するオブジェクト
 	 * @returns { StateChooseNode<T> }
 	 */
-	choose(props, val, callback) {
-		return new GenStateChooseNode(this, props, val, callback);
+	choose(props, val, children) {
+		return new GenStateChooseNode(this, props, val, children);
 	}
 
 	/**

@@ -95,9 +95,9 @@ function Main(ctx, props, children) {
 		ctx.$(CountButton, { onclick: () => ++cnt.value }, [
 			ctx.t`CountUp`
 		]),
-		ctx.choose({}, ctx.computed(() => cnt.value % 5 !== 1), v => {
-			return v && ctx.$(SohwCount, { cnt });
-		})
+		ctx.choose({}, cnt, [
+			[cnt => cnt % 5 !== 1, ctx.$(SohwCount, { cnt })]
+		])
 	]);
 }
 Main.propTypes = {
