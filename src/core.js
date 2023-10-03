@@ -1,15 +1,15 @@
 
 /**
  * @typedef {{
- * 		label?: CallerLabel | undefined;
+ * 		label?: ICallerLabel | undefined;
  * 		caller: Function;
  * }} CallerType 状態変数における呼び出し元についての型
  */
 
 /**
- * CallerTypeに対するラベルの型
+ * CallerTypeに対するラベルのインターフェース
  */
-class CallerLabel {
+class ICallerLabel {
 	/**
 	 * 状態の更新の蓄積を行う
 	 * @param { Function } caller 状態の参照先
@@ -19,7 +19,7 @@ class CallerLabel {
 
 /**
  * DOM更新のためのCallerTypeに対するラベルの型
- * @extends { CallerLabel }
+ * @extends { ICallerLabel }
  */
 class DomUpdateCallerLabel {
 	/** @type { StateNode } 更新対象となるStateNode(コンポーネント) */
@@ -87,10 +87,60 @@ class DomUpdateController {
 }
 
 /**
- * 状態変数
+ * Stateのインターフェース
  * @template T
  */
-class State {
+class IState {
+	/**
+	 * @returns { T }
+	 */
+	get value() { throw new Error('not implemented.'); }
+
+	/**
+	 * 単方向データの作成
+	 * @returns { { state: IState<T>; caller?: { caller: CallerType; states: State<unknown>[] }} } 呼び出し元情報
+	 */
+	unidirectional() { throw new Error('not implemented.'); }
+}
+
+/**
+ * 状態変数と同様の振る舞いをする変数
+ * @template T
+ * @extends { IState<T> }
+ */
+class NotState extends IState {
+	/** @type { T } 変数の本体 */
+	#value;
+
+	/**
+	 * コンストラクタ
+	 * @param { T } value 変数の値
+	 */
+	constructor(value) {
+		super();
+		this.#value = value;
+	}
+
+	/**
+	 * @returns { T }
+	 */
+	get value() { return this.#value; }
+
+	/**
+	 * 単方向データの作成
+	 * @returns { { state: IState<T>; caller?: { caller: CallerType; states: State<unknown>[] }} } 呼び出し元情報
+	 */
+	unidirectional() {
+		return this;
+	}
+}
+
+/**
+ * 状態変数
+ * @template T
+ * @extends { IState<T> }
+ */
+class State extends IState {
 	/** @type { Context } 状態変数の扱っているコンテキスト */
 	#ctx;
 	/** @type { T } 状態変数の本体 */
@@ -106,6 +156,7 @@ class State {
 	 * @param { T } value 状態変数の初期値
 	 */
 	constructor(ctx, value) {
+		super();
 		this.#ctx = ctx;
 		this.#value = value;
 	}
@@ -124,6 +175,15 @@ class State {
 			this.#value = value;
 			this.#ctx.updateState(this.#callerList);
 		}
+	}
+
+	/**
+	 * 単方向データの作成
+	 * @returns { { state: IState<T>; caller?: { caller: CallerType; states: State<unknown>[] }} } 呼び出し元情報
+	 */
+	unidirectional() {
+		const dest = this.ctx.useState(undefined);
+		return { state: dest, caller: this.ctx.unidirectional(this, dest) };
 	}
 
 	/**
@@ -227,6 +287,9 @@ class State {
 				}
 			});
 		}
+		else if (prop instanceof IState) {
+			this.value = prop.value;
+		}
 		else {
 			this.value = prop;
 		}
@@ -236,8 +299,9 @@ class State {
 /**
  * 算出プロパティ
  * @template T
+ * @extends { IState<T> }
  */
-class Computed {
+class Computed extends IState {
 	/** @type { State<T> } 状態変数 */
 	#state;
 
@@ -247,18 +311,28 @@ class Computed {
 	 * @param { () => T } f 算出プロパティを計算する関数
 	 */
 	constructor(ctx, f) {
-		this.#state = new State(ctx, undefined);
+		super();
+		this.#state = ctx.useState(undefined);
 		this.#state.observe(f);
 	}
 
 	get value() { return this.#state.value; }
+
+	/**
+	 * 単方向データの作成
+	 * @returns { { state: IState<T>; caller?: { caller: CallerType; states: State<unknown>[] }} } 呼び出し元情報
+	 */
+	unidirectional() {
+		const dest = this.ctx.useState(undefined);
+		return { state: dest, caller: this.ctx.unidirectional(this, dest) };
+	}
 
 	get ctx() { return this.#state.ctx; }
 }
 
 /**
  * @template T
- * @typedef { T extends State<infer U1> ? U1 : T extends Computed<infer U2> ? U2 : T } ElementTypeOfState 状態変数の要素型を得る
+ * @typedef { T extends IState<infer U> ? U : T } ElementTypeOfState 状態変数の要素型を得る
  */
 
 /**
@@ -324,7 +398,7 @@ class Computed {
 
 /**
  * @template T
- * @typedef { { [K in keyof T]: T[K] extends State<infer U1> ? U1 : T[K] extends Computed<infer U2> ? U2 : T[K] } } ObservableComponentStatesImpl
+ * @typedef { { [K in keyof T]: ElementTypeOfState<T[K]> } } ObservableComponentStatesImpl
  */
 
 /**
@@ -1268,17 +1342,17 @@ class GenStateComponent extends GenStateNode {
 		for (const key in this.#component.propTypes ?? {}) {
 			const val = this.#props[key];
 			// 渡されたプロパティが状態変数なら単方向データに変換して渡すようにする
-			if (val instanceof State || val instanceof Computed) {
-				const s = new State(val.ctx, val.value);
-				const caller = this.ctx.unidirectional(val, s);
+			if (val instanceof IState) {
+				const { state, caller } = val.unidirectional();
 				if (caller && caller.states.length > 0) callerList.push(caller);
-				compProps[key] = s;
+				compProps[key] = state;
 			}
 			else {
 				// 値が与えられなかった場合はデフォルト値から持ってくる
 				const val2 = val === undefined || val === null || val === false ? this.#component.propTypes[key] : val;
 				if (val2 !== undefined && val2 !== null && val2 !== false) {
-					compProps[key] = new State(this.ctx, val2);
+					// IStateとなるように伝播
+					compProps[key] = new NotState(val2);
 				}
 			}
 		}
@@ -1546,7 +1620,7 @@ class GenStateChooseNode extends GenStateNode {
 
 /**
  * @template T
- * @typedef { State<T> | Computed<T> | T } CtxValueType コンテキスト上での値の型
+ * @typedef { IState<T> | T } CtxValueType コンテキスト上での値の型
  */
 
 /**
@@ -1573,7 +1647,7 @@ class GenStateChooseNode extends GenStateNode {
 
 /**
  * @template T
- * @typedef { T extends { propTypes: Record<string, unknown> } ? { [K in keyof T['propTypes']]: State<T['propTypes'][K]> } : {} } CompPropTypes コンポーネント上でのプロパティの型
+ * @typedef { T extends { propTypes: Record<string, unknown> } ? { [K in keyof T['propTypes']]: IState<T['propTypes'][K]> } : {} } CompPropTypes コンポーネント上でのプロパティの型
  */
 
 /**
@@ -1724,7 +1798,7 @@ class Context {
 	/**
 	 * 単方向データの作成
 	 * @template T, U
-	 * @param { State<T> | Computed<T> | () => T } src 作成元のデータ
+	 * @param { IState<T> | () => T } src 作成元のデータ
 	 * @param { State<U> } dest 作成対象のデータ
 	 * @param { (from: T) => U } trans 変換関数
 	 * @returns { { caller: CallerType; states: State<unknown>[] } } 呼び出し元情報
@@ -1779,6 +1853,9 @@ class Context {
 		if (val instanceof State || val instanceof Computed) {
 			return val.ctx.call({ caller: () => setter(val.value), label });
 		}
+		else if (val instanceof IState) {
+			setter(val.value);
+		}
 		// 状態変数でない場合はそのまま設定
 		else {
 			setter(val);
@@ -1793,7 +1870,7 @@ class Context {
 	 * @returns { R }
 	 */
 	useParam(val, callback = x => x) {
-		return callback(val instanceof State || val instanceof Computed ? val.value : val);
+		return callback(val instanceof IState ? val.value : val);
 	}
 
 	/**
@@ -1806,7 +1883,7 @@ class Context {
 		nodeList.forEach(e => {
 			if (e) {
 				// 子にテキストの状態が渡された場合は変更を監視する
-				if (e instanceof State || e instanceof Computed) {
+				if (e instanceof IState) {
 					result.push(new GenStateTextNode(this, e));
 				}
 				else if (typeof e === 'string') {
@@ -1883,7 +1960,7 @@ class Context {
 			let result = '';
 			values.forEach((value, idx) => {
 				result += strs[idx];
-				if (value instanceof State || value instanceof Computed) {
+				if (value instanceof IState) {
 					result += `${value.value}`;
 				}
 				else if (value instanceof Function) {
@@ -2007,7 +2084,7 @@ class Context {
  */
 function watch(state, f, ctx = undefined) {
 	const ctx2 = ctx || new Context();
-	const trigger = new State(ctx2, -1);
+	const trigger = ctx2.useState(-1);
 	const caller = () => { trigger.value = trigger.value % 2 + 1; };
 
 	if (state instanceof State) {
@@ -2050,4 +2127,4 @@ function watch(state, f, ctx = undefined) {
 	}
 }
 
-export { State, Context, watch };
+export { Context, watch };
