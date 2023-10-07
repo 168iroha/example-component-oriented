@@ -1037,7 +1037,7 @@ class GenStateDomNode extends GenStateNode {
 							for (const styleKey in val) {
 								const caller = this.ctx.setParam(
 									val[styleKey],
-									val => element.style[styleKey] = val ?? '',
+									val => element.style.setProperty(styleKey, val ?? ''),
 									label
 								);
 								if (caller && caller.states.length > 0) callerList.push(caller);
@@ -1629,10 +1629,25 @@ class GenStateChooseNode extends GenStateNode {
  */
 
 /**
+ * @template { string } T
+ * @typedef { T extends `${infer T1}${infer T2}${infer T3}`
+ * 		? T2 extends ('-' | '0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9') ? `${Uncapitalize<T1>}${CamelToKebab<`${T2}${T3}`>}`
+ * 		: T2 extends Capitalize<T2>
+ * 			? `${Uncapitalize<T1>}-${CamelToKebab<`${Uncapitalize<T2>}${T3}`>}`
+ * 			: `${Uncapitalize<T1>}${CamelToKebab<`${T2}${T3}`>}`
+ * 		: T } CamelToKebab キャメルケースの文字列をケバブケースの文字列へ変換
+ */
+
+/**
+ * @template { Record<T, unknown> } T
+ * @typedef {{ [K in keyof T as CamelToKebab<string & K>]: T[K]; }} CamelToKebabObject オブジェクトのキーをキャメルケースからケバブケースへ変換
+ */
+
+/**
  * @template { HTMLElement } T
  * @typedef { CtxPropTypes<
  * 		RemoveReadonlyProperty<RemoveFunction<T>> &
- * 		{ style: CtxPropTypes<RemoveReadonlyProperty<RemoveFunction<CSSStyleDeclaration>>> }
+ * 		{ style: CtxPropTypes<CamelToKebabObject<RemoveReadonlyProperty<RemoveFunction<CSSStyleDeclaration>>> & Record<string, string>> }
  * > } CtxDomPropTypes コンテキスト上でのDOMのプロパティの型
  */
 
