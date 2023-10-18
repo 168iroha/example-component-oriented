@@ -341,8 +341,8 @@ class Computed extends IState {
  */
 
 /**
- * @template { (ctx: Context, props: CompPropTypes<K>, children: CompChildType) => GenStateNode | { node: GenStateNode; exposeStates?: Record<string, unknown> } } K
- * @typedef { (ctx: Context, props: CompPropTypes<K>, children: CompChildType) => GenStateNode | { node: GenStateNode; exposeStates?: Record<string, unknown> } } ComponentType コンポーネントの型
+ * @template { (ctx: Context, props: CompPropTypes<K> extends {} ? ({} | undefined) : CompPropTypes<K>, children: GenStateNode[] | undefined) => GenStateNode | { node: GenStateNode; exposeStates?: Record<string, unknown> } } K
+ * @typedef { (ctx: Context, props: CompPropTypes<K> extends {} ? ({} | undefined) : CompPropTypes<K>, children: GenStateNode[] | undefined) => GenStateNode | { node: GenStateNode; exposeStates?: Record<string, unknown> } } ComponentType コンポーネントの型
  */
 
 /**
@@ -1305,7 +1305,7 @@ class GenStateComponent extends GenStateNode {
 	 * @param { Context } ctx StateNodeを生成するコンテキスト
 	 * @param { K } component コンポーネントを示す関数
 	 * @param { CtxCompPropTypes<K> } props プロパティ
-	 * @param { CtxChildType } children 子要素
+	 * @param { CtxChildType<K> } children 子要素
 	 */
 	constructor(ctx, component, props, children) {
 		super(ctx);
@@ -1652,7 +1652,19 @@ class GenStateChooseNode extends GenStateNode {
  */
 
 /**
- * @typedef { (GenStateNode | HTMLElement | Text | CtxValueType<string> | false | null | undefined)[] } CtxChildType コンテキスト上での子要素の型
+ * @template { string | ComponentType<K> } K
+ * @typedef { K extends string
+ * 		? (GenStateNode | Text | CtxValueType<string>)[]
+ * 		: Parameters<K>[2] extends undefined ? [] : TransformGenStateNodeToCtxChildType<Parameters<K>[2]>
+ * } CtxChildType コンテキスト上での子要素の型
+ */
+
+/**
+ * @template { unknown[] } T
+ * @typedef {{
+ * 		[K in keyof T]: GenStateNode extends T[K] ? (GenStateNode | Text | CtxValueType<string>)
+ * 		: GenStateTextNode extends T[K] ? (Text | CtxValueType<string>) : T[K];
+ * }} TransformGenStateNodeToCtxChildType GenStateNodeからコンテキスト上の子要素の型へ変換
  */
 
 /**
@@ -1663,10 +1675,6 @@ class GenStateChooseNode extends GenStateNode {
 /**
  * @template T
  * @typedef { T extends { propTypes: Record<string, unknown> } ? { [K in keyof T['propTypes']]: IState<T['propTypes'][K]> } : {} } CompPropTypes コンポーネント上でのプロパティの型
- */
-
-/**
- * @typedef { GenStateNode[] } CompChildType コンポーネント上での子要素の型
  */
 
 /**
@@ -1890,29 +1898,24 @@ class Context {
 
 	/**
 	 * ノードリストを正規化する
-	 * @param { CtxChildType } nodeList 対象のノード
+	 * @param { CtxChildType<'div'> } nodeList 対象のノード
 	 * @return { GenStateNode[] }
 	 */
 	normalizeCtxChild(nodeList) {
 		const result = [];
 		nodeList.forEach(e => {
-			if (e) {
-				// 子にテキストの状態が渡された場合は変更を監視する
-				if (e instanceof IState) {
-					result.push(new GenStateTextNode(this, e));
-				}
-				else if (typeof e === 'string') {
-					result.push(new GenStateTextNode(this, e));
-				}
-				else if (e instanceof Text) {
-					result.push(new GenStateTextNode(this, e.data));
-				}
-				else if (e instanceof HTMLElement) {
-					result.push(new GenStateHTMLElement(this, e, []));
-				}
-				else {
-					result.push(e);
-				}
+			// 子にテキストの状態が渡された場合は変更を監視する
+			if (e instanceof IState) {
+				result.push(new GenStateTextNode(this, e));
+			}
+			else if (typeof e === 'string') {
+				result.push(new GenStateTextNode(this, e));
+			}
+			else if (e instanceof Text) {
+				result.push(new GenStateTextNode(this, e.data));
+			}
+			else {
+				result.push(e);
 			}
 		});
 		return result;
@@ -1923,14 +1926,14 @@ class Context {
 	 * @overload
 	 * @param { K } tag HTMLタグ
 	 * @param { K extends string ? CtxDomPropTypes<CreatedElementType<K>> : CtxCompPropTypes<K> } props プロパティ
-	 * @param { CtxChildType } children 子要素
+	 * @param { CtxChildType<K> } children 子要素
 	 * @returns { K extends string ? GenStateDomNode<K> : GenStateComponent<K> }
 	 */
 	/**
 	 * @template { string | ComponentType<K> } K
 	 * @overload
 	 * @param { K } tag HTMLタグ
-	 * @param { CtxChildType } props 子要素
+	 * @param { CtxChildType<K> } props 子要素
 	 * @param { [] } children 略
 	 * @returns { K extends string ? GenStateDomNode<K> : GenStateComponent<K> }
 	 */
@@ -1938,8 +1941,8 @@ class Context {
 	 * DOMノード/コンポーネントの生成
 	 * @template { string | ComponentType<K> } K
 	 * @param { K } tag HTMLタグ
-	 * @param { (K extends string ? CtxDomPropTypes<CreatedElementType<K>> : CtxCompPropTypes<K>) | CtxChildType } props プロパティ
-	 * @param { CtxChildType | undefined } children 子要素
+	 * @param { (K extends string ? CtxDomPropTypes<CreatedElementType<K>> : CtxCompPropTypes<K>) | CtxChildType<K> } props プロパティ
+	 * @param { CtxChildType<K> | undefined } children 子要素
 	 * @returns { K extends string ? GenStateDomNode<K> : GenStateComponent<K> }
 	 */
 	$(tag, props = {}, children = []) {
@@ -2142,4 +2145,4 @@ function watch(state, f, ctx = undefined) {
 	}
 }
 
-export { Context, watch };
+export { GenStateNode, GenStateTextNode, Context, watch };

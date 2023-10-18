@@ -1,4 +1,4 @@
-import { Context } from "../../src/core.js";
+import { GenStateNode, Context } from "../../src/core.js";
 
 /**
  * @template T
@@ -6,14 +6,10 @@ import { Context } from "../../src/core.js";
  */
 
 /**
- * @typedef { import("../../src/core.js").CompChildType } CompChildType コンポーネント上での子要素の型
- */
-
-/**
  * 雑にカウントを行うボタン
  * @param { Context } ctx
  * @param { CompPropTypes<typeof CountButton> } props 
- * @param { CompChildType } children
+ * @param { [GenStateNode] } children
  * @returns 
  */
 function CountButton(ctx, props, children) {
@@ -41,10 +37,9 @@ CountButton.propTypes = {
  * 現在のカウントを表示する
  * @param { Context } ctx
  * @param { CompPropTypes<typeof SohwCount> } props 
- * @param { CompChildType } children
  * @returns 
  */
-function SohwCount(ctx, props, children) {
+function SohwCount(ctx, props) {
 	ctx.onMount(() => {
 		console.log('[mount] SohwCount');
 	});
@@ -70,10 +65,9 @@ SohwCount.propTypes = {
  * メインとなるコンポーネント
  * @param { Context } ctx
  * @param { CompPropTypes<typeof Main> } props 
- * @param { CompChildType } children
  * @returns 
  */
-function Main(ctx, props, children) {
+function Main(ctx, props) {
 	// カウンタの初期値のため状態変数ではなく現時点の値として受け取る
 	const cnt = ctx.useState(props.init.value);
 	const input = ctx.useState('');
