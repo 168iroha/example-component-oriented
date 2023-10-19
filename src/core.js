@@ -245,47 +245,49 @@ class State extends IState {
 	 */
 	observe(prop) {
 		if (prop instanceof State || prop instanceof Computed || prop instanceof Function) {
-			this.ctx.unuseReferenceCheck(() => {
-				const caller = this.ctx.unidirectional(prop, this);
-				// state.onreferenceなしでstateが1つ以上の参照をもつ(親への状態の伝播なしで状態の参照が存在する場合)
-				// もしくはstate.onreferenceなしでstateが2つ以上の参照をもつ(親への状態の伝播ありで状態の参照が存在する場合)
-				// もしくはonreference()の戻り値がtrue(親への状態の伝播ありで祖先で状態の参照が存在する場合)
-				// の場合に状態変数は利用されている
-				const flag = (typeof this.#onreference === 'boolean') ? this.#onreference : (!this.#onreference && this.count > 0) || (this.#onreference && this.#onreference(this));
-				caller.states.forEach(s => {
-					// 1つの状態を複数の状態変数が観測できるようにする
-					if (!s.#onreference) {
-						s.#onreference = s2 => {
-							s2.#onreference = flag;
-							return flag;
-						};
-					}
-				});
-				// このタイミングで値が利用されていない際はchoose()などで後から利用される可能性があるため
-				// 後から通知を行うことができるようにする
-				if (!flag) {
-					// 関連付けられた状態変数のonreferenceを連鎖的に呼び出す
-					this.#onreference = s => {
-						s.#onreference = true;
-						caller.states.forEach(state => {
-							if (state.#onreference instanceof Function) {
-								state.#onreference(state);
-							}
-							state.#onreference = true;
-						});
-						return false;
+			// onreferenceが発火しないように退避
+			const temp = this.#onreference;
+			this.#onreference = undefined;
+			const caller = this.ctx.unidirectional(prop, this);
+			this.#onreference = temp;
+			// state.onreferenceなしでstateが1つ以上の参照をもつ(親への状態の伝播なしで状態の参照が存在する場合)
+			// もしくはstate.onreferenceなしでstateが2つ以上の参照をもつ(親への状態の伝播ありで状態の参照が存在する場合)
+			// もしくはonreference()の戻り値がtrue(親への状態の伝播ありで祖先で状態の参照が存在する場合)
+			// の場合に状態変数は利用されている
+			const flag = (typeof this.#onreference === 'boolean') ? this.#onreference : (!this.#onreference && this.count > 0) || (this.#onreference && this.#onreference(this));
+			caller.states.forEach(s => {
+				// 1つの状態を複数の状態変数が観測できるようにする
+				if (!s.#onreference) {
+					s.#onreference = s2 => {
+						s2.#onreference = flag;
+						return flag;
 					};
 				}
-				// 参照ありでonreferenceが呼び出し済みなら関連付けられた状態変数のonreferenceを連鎖的に呼び出す
-				else {
+			});
+			// このタイミングで値が利用されていない際はchoose()などで後から利用される可能性があるため
+			// 後から通知を行うことができるようにする
+			if (!flag) {
+				// 関連付けられた状態変数のonreferenceを連鎖的に呼び出す
+				this.#onreference = s => {
+					s.#onreference = true;
 					caller.states.forEach(state => {
 						if (state.#onreference instanceof Function) {
 							state.#onreference(state);
 						}
 						state.#onreference = true;
 					});
-				}
-			});
+					return false;
+				};
+			}
+			// 参照ありでonreferenceが呼び出し済みなら関連付けられた状態変数のonreferenceを連鎖的に呼び出す
+			else {
+				caller.states.forEach(state => {
+					if (state.#onreference instanceof Function) {
+						state.#onreference(state);
+					}
+					state.#onreference = true;
+				});
+			}
 		}
 		else if (prop instanceof IState) {
 			this.value = prop.value;
@@ -1692,8 +1694,6 @@ class GenStateChooseNode extends GenStateNode {
 class Context {
 	/** @type { { caller: CallerType; states: State<unknown>[] }[] } 状態変数とその呼び出し元を記録するスタック */
 	#stack = [];
-	/** @type { boolean[] } 参照のチェックを行う(Stateのonreferenceを呼び出す)かのフラグ */	
-	#checkReference = [true];
 	/** @type { LifeCycle[] } コンポーネントに設置されたライフサイクルに関するスタック */
 	#componentStack = [];
 
@@ -1764,33 +1764,13 @@ class Context {
 	}
 
 	/**
-	 * 参照のチェックを利用するコンテキストで関数を実行する
-	 * @param { () => unknown } callback 参照チェックを利用するコンテキストで実行するコールバック
-	 */
-	useReferenceCheck(callback) {
-		this.#checkReference.push(true);
-		callback();
-		this.#checkReference.pop();
-	}
-
-	/**
-	 * 参照のチェックを利用しないコンテキストで関数を実行する
-	 * @param { () => unknown } callback 参照チェックを利用するコンテキストで実行するコールバック
-	 */
-	unuseReferenceCheck(callback) {
-		this.#checkReference.push(false);
-		callback();
-		this.#checkReference.pop();
-	}
-
-	/**
 	 * 状態変数のキャプチャの通知
 	 * @template T
 	 * @param { State<T> } state 通知対象の状態変数
 	 */
 	notify(state) {
 		if (this.#stack.length > 0) {
-			if (this.#checkReference[this.#checkReference.length - 1] && state.onreference instanceof Function) {
+			if (state.onreference instanceof Function) {
 				// 参照追加に関するイベントの発火
 				state.onreference(state);
 			}
