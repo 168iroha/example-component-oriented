@@ -60,15 +60,7 @@ class DomUpdateCallerLabel {
 		// DOM更新の前後でupdateライフサイクルフックを発火しつつタスクを実行する
 		this.#component.onBeforeUpdate();
 		for (const task of taskSet) {
-			try {
-				const ret = task();
-				if (ret instanceof Promise) {
-					ret.catch(reason => this.#component.onErrorCaptured(reason, this.#component));
-				}
-			}
-			catch (e) {
-				this.#component.onErrorCaptured(e, this.#component);
-			}
+			createWrapperFunction(task, this.#component)();
 		}
 		this.#component.onAfterUpdate();
 	}
@@ -1127,6 +1119,7 @@ class GenStateDomNode extends GenStateNode {
 							element.removeAttribute('style');
 						}
 					}
+					// 属性が初期値を設定するものならば属性の設定を優先する
 					else if (
 						lowerTag === 'input' && key === 'value' ||
 						lowerTag === 'input' && key === 'checked' ||
@@ -1139,6 +1132,10 @@ class GenStateDomNode extends GenStateNode {
 							// 初期値の設定
 							element.setAttribute(key, val);
 						}
+					}
+					// 関数を設定する場合はエラーハンドリングを行うようにする
+					else if (val instanceof Function) {
+						element[key] = createWrapperFunction(val, stateComponent);
 					}
 					// その他プロパティはそのまま設定する
 					else {
@@ -1911,15 +1908,7 @@ class Context {
 			else {
 				if (this.#component) {
 					// コンポーネントが有効な場合はエラーハンドリングを実施
-					try {
-						const ret = val.caller();
-						if (ret instanceof Promise) {
-							ret.catch(reason => this.#component.onErrorCaptured(reason, this.#component));
-						}
-					}
-					catch (e) {
-						this.#component.onErrorCaptured(e, this.#component);
-					}
+					createWrapperFunction(val.caller, this.#component)();
 				}
 				else {
 					val.caller();
@@ -2287,23 +2276,13 @@ function watch(state, f) {
 		const component = state.ctx.component;
 
 		/** @type { CallerType } */
-		const caller = component ?
+		const caller =
 		// コンポーネントが有効な場合はエラーハンドリングを実施
-		{ caller: () => {
+		{ caller: component ? () => {
 			prevState = nextState;
 			nextState = state.value;
-			try {
-				const ret = f(prevState, nextState);
-				if (ret instanceof Promise) {
-					ret.catch(reason => component.onErrorCaptured(reason, component));
-				}
-				return ret;
-			}
-			catch (e) {
-				component.onErrorCaptured(e, component);
-			}
-		}} :
-		{ caller: () => {
+			createWrapperFunction(f, component)(prevState, nextState);
+		} : () => {
 			prevState = nextState;
 			nextState = state.value;
 			f(prevState, nextState);
@@ -2315,23 +2294,35 @@ function watch(state, f) {
 		// 一番最初に発見した有効なコンポーネントを通知先とする
 		const component = state.find(s => s.ctx.component)?.ctx?.component;
 		/** @type { CallerType } */
-		const caller = component ?
-		// コンポーネントが有効な場合はエラーハンドリングを実施
-		{ caller: () => {
-			try {
-				const ret = f();
-				if (ret instanceof Promise) {
-					ret.catch(reason => component.onErrorCaptured(reason, component));
-				}
-				return ret;
-			}
-			catch (e) {
-				component.onErrorCaptured(e, component);
-			}
-		}} :
-		{ caller: f };
+		const caller = { caller: component ?  createWrapperFunction(f, component) : f };
 		state.forEach(s => s.add(caller));
 		return caller;
+	}
+}
+
+/**
+ * エラーハンドリングを行うようにラップした関数を生成する
+ * @template { Function } T
+ * @template { ComponentType<K> } K
+ * @param { T } f ラップ対象の関数
+ * @param { StateComponent<K> } component エラーハンドリング対象のコンポーネント
+ * @return { T }
+ */
+function createWrapperFunction(f, component) {
+	/**
+	 * @param { Parameters<T> } args
+	 */
+	return (...args) => {
+		try {
+			const ret = f(...args);
+			if (ret instanceof Promise) {
+				return ret.catch(reason => component.onErrorCaptured(reason, component));
+			}
+			return ret;
+		}
+		catch (e) {
+			component.onErrorCaptured(e, component);
+		}
 	}
 }
 
