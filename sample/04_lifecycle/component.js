@@ -36,26 +36,26 @@ CountButton.propTypes = {
 /**
  * 現在のカウントを表示する
  * @param { Context } ctx
- * @param { CompPropTypes<typeof SohwCount> } props 
+ * @param { CompPropTypes<typeof ShowCount> } props 
  * @returns 
  */
-function SohwCount(ctx, props) {
+function ShowCount(ctx, props) {
 	ctx.onMount(() => {
-		console.log('[mount] SohwCount');
+		console.log('[mount] ShowCount');
 	});
 	ctx.onUnmount(() => {
-		console.log('[unmount] SohwCount');
+		console.log('[unmount] ShowCount');
 	});
 	ctx.onBeforeUpdate(() => {
-		console.log('[beforeUpdate] SohwCount');
+		console.log('[beforeUpdate] ShowCount');
 	});
 	ctx.onAfterUpdate(() => {
-		console.log('[afterUpdate] SohwCount');
+		console.log('[afterUpdate] ShowCount');
 	});
 
 	return ctx.$('div', [ctx.t`Count is: ${props.cnt}`]);
 }
-SohwCount.propTypes = {
+ShowCount.propTypes = {
 	/** @type { number } 現在のカウント */
 	cnt: 0
 };
@@ -90,7 +90,7 @@ function Main(ctx, props) {
 			ctx.t`CountUp`
 		]),
 		ctx.choose({}, cnt, [
-			[cnt => cnt % 5 !== 1, ctx.$(SohwCount, { cnt })]
+			[cnt => cnt % 5 !== 1, ctx.$(ShowCount, { cnt })]
 		])
 	]);
 }
