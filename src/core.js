@@ -222,6 +222,12 @@ class State extends IState {
 	get ctx() { return this.#ctx; }
 
 	/**
+	 * 明示的に呼び出し元情報を追加する
+	 * @param { CallerType } caller 呼び出し元の関数
+	 */
+	add(caller) { this.#callerList.add(caller); }
+
+	/**
 	 * 明示的に呼び出し元情報を削除する
 	 * @param { CallerType } caller 呼び出し元の関数
 	 * @returns 
@@ -2258,67 +2264,74 @@ class Context {
  * @overload
  * @param { State<T> } state 監視を行う状態変数
  * @param { (prev: T, next: T) => unknown } f ウォッチャー
- * @param { Context | undefined } ctx ウォッチャーの呼び出しを行うコンテキスト
- * @returns { () => void } ウォッチャーを削除する関数
+ * @returns { CallerType }
  */
 /**
  * @template T
  * @overload
  * @param { State<unknown>[] } state 監視を行う状態変数のリスト
- * @param { Function } f ウォッチャー
- * @param { Context | undefined } ctx ウォッチャーの呼び出しを行うコンテキスト
- * @returns { () => void } ウォッチャーを削除する関数
+ * @param { () => unknown } f ウォッチャー
+ * @returns { CallerType }
  */
 /**
  * ウォッチャーの宣言
  * @template T
  * @param { State<unknown>[] | State<T> } state 監視を行う状態変数
- * @param { Function } f ウォッチャー
- * @param { Context | undefined } ctx ウォッチャーの呼び出しを行うコンテキスト
- * @returns { () => void } ウォッチャーを削除する関数
+ * @param { (() => unknown) | ((prev: T, next: T) => unknown) } f ウォッチャー
+ * @returns { CallerType }
  */
-function watch(state, f, ctx = undefined) {
-	const ctx2 = ctx || new Context();
-	const trigger = ctx2.useState(-1);
-	const caller = () => { trigger.value = trigger.value % 2 + 1; };
-
+function watch(state, f) {
 	if (state instanceof State) {
 		let prevState =  state.value;
 		let nextState = state.value;
-		const ctxCaller = state.ctx.call(() => {
+		const component = state.ctx.component;
+
+		/** @type { CallerType } */
+		const caller = component ?
+		// コンポーネントが有効な場合はエラーハンドリングを実施
+		{ caller: () => {
 			prevState = nextState;
 			nextState = state.value;
-			caller();
-		});
-
-		const ctx2Caller = ctx2.call(() => {
-			// 初回には実行されないようにする
-			if (trigger.value !== 0) {
-				f(prevState, nextState);
+			try {
+				const ret = f(prevState, nextState);
+				if (ret instanceof Promise) {
+					ret.catch(reason => component.onErrorCaptured(reason, component));
+				}
+				return ret;
 			}
-		});
-
-		// ウォッチャーを削除する関数を返す
-		return () => {
-			ctxCaller.states.forEach(s => s.delete(ctxCaller.caller));
-			ctx2Caller.states.forEach(s => s.delete(ctx2Caller.caller));
-		};
+			catch (e) {
+				component.onErrorCaptured(e, component);
+			}
+		}} :
+		{ caller: () => {
+			prevState = nextState;
+			nextState = state.value;
+			f(prevState, nextState);
+		}};
+		state.add(caller);
+		return caller;
 	}
 	else {
-		const ctxCallers = state.map(s => s.ctx.call(() => { s.value; caller(); }));
-
-		const ctx2Caller = ctx2.call(() => {
-			// 初回には実行されないようにする
-			if (trigger.value !== 0) {
-				f();
+		// 一番最初に発見した有効なコンポーネントを通知先とする
+		const component = state.find(s => s.ctx.component)?.ctx?.component;
+		/** @type { CallerType } */
+		const caller = component ?
+		// コンポーネントが有効な場合はエラーハンドリングを実施
+		{ caller: () => {
+			try {
+				const ret = f();
+				if (ret instanceof Promise) {
+					ret.catch(reason => component.onErrorCaptured(reason, component));
+				}
+				return ret;
 			}
-		});
-
-		// ウォッチャーを削除する関数を返す
-		return () => {
-			ctxCallers.forEach(ctxCaller => ctxCaller.states.forEach(s => s.delete(ctxCaller.caller)));
-			ctx2Caller.states.forEach(s => s.delete(ctx2Caller.caller));
-		};
+			catch (e) {
+				component.onErrorCaptured(e, component);
+			}
+		}} :
+		{ caller: f };
+		state.forEach(s => s.add(caller));
+		return caller;
 	}
 }
 
