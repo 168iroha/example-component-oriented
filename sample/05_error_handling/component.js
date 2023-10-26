@@ -13,20 +13,15 @@ import { GenStateNode, Context } from "../../src/core.js";
  * @returns 
  */
 function CountButton(ctx, props, children) {
-	ctx.onMount(() => {
-		console.log('[mount] CountButton');
-	});
-	ctx.onUnmount(() => {
-		console.log('[unmount] CountButton');
-	});
-	ctx.onBeforeUpdate(() => {
-		console.log('[beforeUpdate] CountButton');
-	});
-	ctx.onAfterUpdate(() => {
-		console.log('[afterUpdate] CountButton');
-	});
-
-	return ctx.$('button', { onclick: () => props.onclick.value() }, children);
+	let cnt = 0;
+	return ctx.$('button', { onclick: () => {
+		cnt = (cnt + 1) % 5;
+		// カウントが5の倍数のときは例外を送信
+		if (cnt === 0) {
+			throw new Error('Error onclick() in CountButton');
+		}
+		props.onclick.value();
+	} }, children);
 }
 CountButton.propTypes = {
 	/** @type { () => unknown } クリックイベント */
@@ -40,17 +35,15 @@ CountButton.propTypes = {
  * @returns 
  */
 function ShowCount(ctx, props) {
-	ctx.onMount(() => {
-		console.log('[mount] ShowCount');
-	});
-	ctx.onUnmount(() => {
-		console.log('[unmount] ShowCount');
-	});
 	ctx.onBeforeUpdate(() => {
-		console.log('[beforeUpdate] ShowCount');
+		throw new Error('Error onBeforeUpdate() in ShowCount');
 	});
-	ctx.onAfterUpdate(() => {
-		console.log('[afterUpdate] ShowCount');
+	ctx.onErrorCaptured(error => {
+		console.log('[errorCaptured] ShowCount', error.message);
+		// カウントが3の倍数のときはエラーを親に伝播しない
+		if (props.cnt.value % 3 === 0) {
+			return false;
+		}
 	});
 
 	return ctx.$('div', [ctx.t`Count is: ${props.cnt}`]);
@@ -73,25 +66,19 @@ function Main(ctx, props) {
 	const input = ctx.useState('');
 
 	ctx.onMount(() => {
+		// マウント前に例外を送信
+		throw new Error('Error onMount() in Main');
 		console.log('[mount] Main');
 	});
-	ctx.onUnmount(() => {
-		console.log('[unmount] Main');
-	});
-	ctx.onBeforeUpdate(() => {
-		console.log('[beforeUpdate] Main');
-	});
-	ctx.onAfterUpdate(() => {
-		console.log('[afterUpdate] Main');
+	ctx.onErrorCaptured(error => {
+		console.log('[errorCaptured] Main', error.message);
 	});
 
 	return ctx.$('div', [
 		ctx.$(CountButton, { onclick: () => ++cnt.value }, [
 			ctx.t`CountUp`
 		]),
-		ctx.choose({}, cnt, [
-			[cnt => cnt % 5 !== 1, ctx.$(ShowCount, { cnt })]
-		])
+		ctx.$(ShowCount, { cnt })
 	]);
 }
 Main.propTypes = {
