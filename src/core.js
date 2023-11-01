@@ -365,8 +365,13 @@ class Computed extends IState {
  */
 
 /**
- * @template { (ctx: Context, props: CompPropTypes<K> extends {} ? ({} | undefined) : CompPropTypes<K>, children: GenStateNode[] | undefined) => GenStateNode | { node: GenStateNode; exposeStates?: Record<string, unknown> } } K
- * @typedef { (ctx: Context, props: CompPropTypes<K> extends {} ? ({} | undefined) : CompPropTypes<K>, children: GenStateNode[] | undefined) => GenStateNode | { node: GenStateNode; exposeStates?: Record<string, unknown> } } ComponentType コンポーネントの型
+ * @template { (ctx: Context, props: CompPropTypes<K> extends {} ? ({} | undefined) : CompPropTypes<K>, children: CompChildrenType<K>) => GenStateNode | { node: GenStateNode; exposeStates?: Record<string, unknown> } } K
+ * @typedef { (ctx: Context, props: CompPropTypes<K> extends {} ? ({} | undefined) : CompPropTypes<K>, children: CompChildrenType<K>) => GenStateNode | { node: GenStateNode; exposeStates?: Record<string, unknown> } } ComponentType コンポーネントの型
+ */
+
+/**
+ * @template { Function } T
+ * @typedef { Parameters<T>[2] } CompChildrenType コンポーネントの子要素の型
  */
 
 /**
@@ -1294,12 +1299,12 @@ class GenStateDomNode extends GenStateNode {
 class StateComponent extends StateNode {
 	/** @type { StateComponent<unknown> | undefined } 親コンポーネント */
 	#parent = undefined;
-	/** @type { GenStateNode } #elementを生成するノード */
-	#genStateNode;
-	/** @type { StateNode | undefined } コンポーネントを代表するノード */
-	#element = undefined;
+	/** @protected @type { GenStateNode } nodeを生成するノード */
+	genStateNode;
+	/** @protected @type { StateNode | undefined } コンポーネントを代表するノード */
+	node = undefined;
 	/** @type { LifeCycle } ライフサイクル */
-	#lifecycle;
+	#lifecycle = {};
 	/** @type { DomUpdateCallerLabel<K> | undefined } DOM更新の際に用いるラベル */
 	#label = undefined;
 
@@ -1318,7 +1323,12 @@ class StateComponent extends StateNode {
 	 * DOMノードの取得
 	 * @returns { HTMLElement | Text | undefined }
 	 */
-	get element() { return this.#element?.element; }
+	get element() { return this.node?.element; }
+
+	/**
+	 * 親コンポーネントの取得
+	 */
+	get parent() { return this.#parent; }
 
 	/**
 	 * ラベルの取得
@@ -1327,7 +1337,6 @@ class StateComponent extends StateNode {
 
 	/**
 	 * コンポーネントを構築する
-	 * @template { ComponentType<K2> } K2
 	 * @param { K } component コンポーネントを示す関数
 	 * @param { CtxCompPropTypes<K> } props プロパティ
 	 * @param { GenStateNode[] } children 子要素
@@ -1359,7 +1368,7 @@ class StateComponent extends StateNode {
 		/** @type { ComponentExposeStates<K> | {} } コンポーネントが公開している状態 */
 		let exposeStates = {};
 		try {
-			({ genStateNode: this.#genStateNode, exposeStates, lifecycle: this.#lifecycle } = this.ctx.buildComponent(component, compProps, children));
+			({ genStateNode: this.genStateNode, exposeStates, lifecycle: this.#lifecycle } = this.ctx.buildComponent(component, compProps, children));
 		}
 		catch (e) {
 			// 状態変数の関連付けを破棄してから例外をリスロー
@@ -1377,24 +1386,34 @@ class StateComponent extends StateNode {
 			}
 		}
 
+		return this.buildRepComponent(this.genStateNode);
+	}
+
+	/**
+	 * コンポーネントを代表するノードを構築する
+	 * @protected
+	 * @param { GenStateNode } genStateNode コンポーネント代表するノードを生成するノード
+	 * @return {{ gen: GenStateNode; children: GenStateNode[] }}
+	 */
+	buildRepComponent(genStateNode) {
 		/** @type {{ gen?: GenStateNode; children?: GenStateNode[] }} */
 		const result = {};
 
-		// #elementの設定
-		if (!this.#genStateNode.isAtomic && !(this.#genStateNode instanceof GenStateComponent)) {
+		// nodeの設定
+		if (!genStateNode.isAtomic && !(genStateNode instanceof GenStateComponent)) {
 			try {
-				({ node: this.#element, gen: result.gen, children: result.children } = this.#genStateNode.buildCurrent());
+				({ node: this.node, gen: result.gen, children: result.children } = genStateNode.buildCurrent());
 			}
 			catch (e) {
 				// コンポーネントの要素の構築をキャンセルし、現在の要素としてはダミーを設置
-				// 復帰が可能でありかつ復帰を行う場合はthis.rebuildChild()により行う
-				result.gen = new GetGenStateNode(new GenStateTextNode(this.ctx, ''), node => this.#element = node);
+				// 復帰が可能でありかつ復帰を行う場合はthis.rebuildChild()などの各コンポーネントにより行う
+				result.gen = new GetGenStateNode(new GenStateTextNode(this.ctx, ''), node => this.node = node);
 				result.children = [];
 				this.onErrorCaptured(e, this);
 			}
 		}
 		else {
-			result.gen = new GetGenStateNode(this.#genStateNode, node => this.#element = node);
+			result.gen = new GetGenStateNode(genStateNode, node => this.node = node);
 			result.children = [];
 		}
 
@@ -1406,10 +1425,10 @@ class StateComponent extends StateNode {
 	 */
 	rebuildChild() {
 		const element = this.element;
-		this.#element?.remove();
-		this.#element = this.#genStateNode.build(this);
+		this.node?.remove();
+		this.node = this.genStateNode.build(this);
 		// ノードの付け替えが可能な場合は付け替える
-		const element2 = this.#element.element;
+		const element2 = this.node.element;
 		if (element && element2) {
 			element2.replaceWith(element);
 		}
@@ -1420,7 +1439,7 @@ class StateComponent extends StateNode {
 	 */
 	remove() {
 		super.remove();
-		this.#element?.remove();
+		this.node?.remove();
 		this.onUnmount();
 	}
 
@@ -1486,14 +1505,14 @@ class StateComponent extends StateNode {
  * @template { ComponentType<K> } K
  */
 class GenStateComponent extends GenStateNode {
-	/** @type { K } コンポーネントを示す関数 */
-	#component;
-	/** @type { CtxCompPropTypes<K> } プロパティ */
-	#props;
-	/** @type { GenStateNode[] } 子要素 */
-	#children;
-	/** @type { ObservableStates<K> | undefined } 観測する対象 */
-	#observableStates = undefined;
+	/** @protected @type { K } コンポーネントを示す関数 */
+	component;
+	/** @protected @type { CtxCompPropTypes<K> } プロパティ */
+	props;
+	/** @protected @type { GenStateNode[] } 子要素 */
+	children;
+	/** @protected @type { ObservableStates<K> | undefined } 観測する対象 */
+	observableStates = undefined;
 	/** @type { boolean } ノードが生成されたことがあるかを示すフラグ */
 	#genFlag = false;
 
@@ -1506,9 +1525,9 @@ class GenStateComponent extends GenStateNode {
 	 */
 	constructor(ctx, component, props, children) {
 		super(ctx);
-		this.#component = component;
-		this.#props = props;
-		this.#children = children;
+		this.component = component;
+		this.props = props;
+		this.children = children;
 	}
 
 	/**
@@ -1516,30 +1535,42 @@ class GenStateComponent extends GenStateNode {
 	 * @returns { GenStateComponent<K> }
 	 */
 	clone() {
-		return new GenStateComponent(this.ctx, this.#component, this.#props, this.#children);
+		return new GenStateComponent(this.ctx, this.component, this.props, this.children);
 	}
 
 	/**
 	 * 自要素を構築する
-	 * @template { ComponentType<K> } K
-	 * @param { StateComponent<K> | undefined } stateComponent ノードを生成する場所
+	 * @template { ComponentType<K2> } K2
+	 * @param { StateComponent<K2> | undefined } stateComponent ノードを生成する場所
 	 * @param { HTMLElement | Text | undefined } target マウント対象のDOMノード
 	 * @returns { { node: StateComponent; gen?: GenStateNode; children: GenStateNode[] } }
 	 */
 	buildCurrent(stateComponent, target) {
 		// 観測を行う同一ノードの2回以上の生成は禁止
-		if (this.#genFlag && this.#observableStates) {
+		if (this.#genFlag && this.observableStates) {
 			throw new Error('The buildCurrent in GenStateComponent must not be called more than twice.');
 		}
 
-		/** 生成するコンポーネントが属するコンテキスト */
-		const ctx = new Context(stateComponent ? stateComponent.ctx : this.ctx, stateComponent);
+		/** 生成するコンポーネントが属するコンテキストとそのコンポーネント */
+		const node = this.buildContext(stateComponent);
 
 		// コンポーネントを構築して返す
-		const result = ctx.component.build(this.#component, this.#props, this.#children, this.#observableStates);
+		const result = node.build(this.component, this.props, this.children, this.observableStates);
 		this.#genFlag = true;
 
-		return { node: ctx.component, ...result };
+		return { node, ...result };
+	}
+
+	/**
+	 * コンポーネントが属するコンテキストを生成し、それをもつコンポーネントを返す
+	 * @protected
+	 * @template { ComponentType<K2> } K2
+	 * @param { StateComponent<K2> | undefined } stateComponent ノードを生成する場所
+	 * @returns { StateComponent<K> }
+	 */
+	buildContext(stateComponent) {
+		const ctx = new Context(stateComponent ? stateComponent.ctx : this.ctx, ctx => new StateComponent(ctx, stateComponent));
+		return ctx.component;
 	}
 
 	/**
@@ -1548,206 +1579,10 @@ class GenStateComponent extends GenStateNode {
 	 */
 	observe(props) {
 		// 既にobserve()が呼びだされたことがあるのならばノードを複製する
-		const node = this.#observableStates ? this.clone() : this;
-		node.#observableStates = props;
+		const node = this.observableStates ? this.clone() : this;
+		node.observableStates = props;
 		node.#genFlag = false;
 		return node;
-	}
-}
-
-/**
- * @template T
- * @typedef { ([(val: ElementTypeOfState<T>) => boolean, GenStateNode | (val: ElementTypeOfState<T>) => GenStateNode] | [GenStateNode | (val: ElementTypeOfState<T>) => GenStateNode])[] } StateChooseNodeChildType StateChooseNodeで用いる子要素の型
- */
-
-/**
- * ノードを選択するノード
- * @template T
- */
-class StateChooseNode extends StateNode {
-	/** @type { StateComponent<unknown> } ノードを生成する場所 */
-	#stateComponent;
-	/** @type { {} } chooseについてのプロパティ(現在はなし) */
-	#props;
-	/** @type { { caller: CallerType; states: State<unknown>[] } | undefined } 表示の切り替えに関する呼び出し元 */
-	#caller = undefined;
-	/** @type { StateNode | undefined } 現在表示しているノード */
-	#currentNode = undefined;
-	/** @type { number } 前回選択した要素のインデックス */
-	#prevChooseIndex = -1;
-
-	/**
-	 * コンストラクタ
-	 * @template { ComponentType<K> } K
-	 * @param { Context } ctx コンポーネントを扱っているコンテキスト
-	 * @param { StateComponent<K> } stateComponent ノードを生成する場所
-	 * @param { {} } props chooseについてのプロパティ(現在はなし)
-	 * @param { T } val 表示対象を切り替える基準となる変数
-	 * @param { StateChooseNodeChildType<T> } children valからDOMノードを選択するオブジェクト
-	 * @param { { gen?: GenStateNode; children?: GenStateNode[] } } result ノードの生成結果を示すオブジェクト
-	 */
-	constructor(ctx, stateComponent, props, val, children, result) {
-		super(ctx, []);
-		this.#stateComponent = stateComponent;
-		this.#props = props;
-		const caller = ctx.setParam(val, val => {
-			// DOMノードが構築されたことがある場合にのみ構築する
-			const element = this.element;
-			if (element) {
-				const parent = element.parentElement;
-				const nextSibling = element.nextElementSibling;
-				const prevNode = this.#currentNode;
-				// 表示する要素が存在しないときは代わりにプレースホルダとして空のTextを表示
-				const genStateNode = this.#chooseNode(val, children);
-
-				if (genStateNode) {
-					// ノードを構築
-					this.#currentNode = genStateNode.build(this.#stateComponent);
-					// 初期表示以降はDOMの更新する関数を通して構築する
-					const insertElement = this.element;
-					this.#stateComponent.label.update(() => {
-						prevNode?.remove();
-						parent.insertBefore(insertElement, nextSibling);
-					});
-				}
-			}
-		});
-		if (caller) {
-			this.callerList.push(caller);
-		}
-
-		// 初期表示の設定(初期表示はgenStateNodeはundefined)
-		const genStateNode = this.#chooseNode(this.ctx.useParam(val), children);
-
-		if (!genStateNode.isAtomic && !(genStateNode instanceof GenStateComponent)) {
-			try {
-				({ gen: result.gen, children: result.children } = genStateNode.buildCurrent(this.#stateComponent));
-			}
-			catch (e) {
-				// コンポーネントの要素の構築をキャンセルし、現在の要素としてはダミーを設置
-				// 復帰が可能でありかつ復帰を行う場合はthis.#chooseNode()により行う
-				result.gen = new GetGenStateNode(new GenStateTextNode(this.ctx, ''), node => this.#currentNode = node);
-				result.children = [];
-				this.#stateComponent.onErrorCaptured(e, this);
-			}
-		}
-		else {
-			result.gen = new GetGenStateNode(genStateNode, node => this.#currentNode = node);
-			result.children = [];
-		}
-	}
-
-	/**
-	 * childrenからノードを選択する
-	 * @param { ElementTypeOfState<T> } val 表示対象を切り替える基準となる変数
-	 * @param { StateChooseNodeChildType<T> } children valからDOMノードを選択するオブジェクト
-	 */
-	#chooseNode(val, children) {
-		/** @type { [] | [GenStateNode] } */
-		let nodeList = [];
-		let i = 0
-		let genStateNodeFlag = false;
-		for (; i < children.length; ++i) {
-			const child = children[i];
-			// 条件式が設定されていない場合
-			if (child.length === 1) {
-				const c = child[0];
-				genStateNodeFlag = c instanceof GenStateNode;
-				nodeList = this.ctx.normalizeCtxChild([genStateNodeFlag ? c : c()]);
-				break;
-			}
-			// 条件式が設定されている場合
-			if (child[0](val)) {
-				const c = child[1];
-				genStateNodeFlag = c instanceof GenStateNode;
-				nodeList = this.ctx.normalizeCtxChild([genStateNodeFlag ? c : c()]);
-				break;
-			}
-		}
-		// ノードが選択されなかった場合はインデックスを-1に統一
-		if (nodeList.length === 0) {
-			i = -1;
-		}
-
-		// 選択したノードに変化があるもしくは関数により生成された場合は新規ノードを生成
-		if (i !== this.#prevChooseIndex || !genStateNodeFlag) {
-			this.#prevChooseIndex = i;
-			if (i === -1) {
-				// 表示する要素が存在しないときは代わりにプレースホルダとして空のTextを表示
-				return new GenStateTextNode(this.ctx, '');
-			}
-			return nodeList[0];
-		}
-		else if (!this.#currentNode) {
-			// 表示する要素が存在しないときは代わりにプレースホルダとして空のTextを表示
-			return new GenStateTextNode(this.ctx, '');
-		}
-		return undefined;
-	}
-
-	/**
-	 * DOMノードの取得
-	 * @returns { HTMLElement | Text | undefined }
-	 */
-	get element() { return this.#currentNode?.element; }
-
-	/**
-	 * ノードの削除
-	 */
-	remove() {
-		super.remove();
-		this.#currentNode?.remove();
-		this.#caller?.states?.forEach(state => state.delete(this.#caller.caller));
-	}
-}
-
-/**
- * StateChooseNodeを生成するためのノード
- * @template T
- */
-class GenStateChooseNode extends GenStateNode {
-	/** @type { {} } chooseについてのプロパティ(現在はなし) */
-	#props;
-	/** @type { T } 表示対象を切り替える基準となる変数 */
-	#val;
-	/** @type { StateChooseNodeChildType<T> } valからDOMノードを選択するオブジェクト */
-	#children;
-
-	/**
-	 * コンストラクタ
-	 * @param { Context } ctx StateNodeを生成するコンテキスト
-	 * @param { {} } props chooseについてのプロパティ(現在はなし)
-	 * @param { T } val 表示対象を切り替える基準となる変数
-	 * @param { StateChooseNodeChildType<T> } children valからDOMノードを選択するオブジェクト
-	 */
-	constructor(ctx, props, val, children) {
-		super(ctx);
-		this.#props = props;
-		this.#val = val;
-		this.#children = children;
-	}
-
-	/**
-	 * 別物のStateNodeを生成しても問題のないGetStateNodeを生成
-	 * @returns { GenStateChooseNode }
-	 */
-	clone() {
-		return new GenStateChooseNode(this.ctx, this.#props, this.#val, this.#children);
-	}
-
-	/**
-	 * 自要素を構築する
-	 * @template { ComponentType<K> } K
-	 * @param { StateComponent<K> } stateComponent ノードを生成する場所
-	 * @param { HTMLElement | Text | undefined } target マウント対象のDOMノード
-	 * @returns { { node: StateChooseNode; gen?: GenStateNode; children: GenStateNode[] } }
-	 */
-	buildCurrent(stateComponent, target) {
-		/** @type { { gen?: GenStateNode; children?: GenStateNode[] } } */
-		const result = {};
-		// atomicでないノードを生成してresultの情報を返す
-		const node = new StateChooseNode(this.ctx, stateComponent, { ...this.#props }, this.#val, this.#children, result);
-		return { node, gen: result.gen, children: result.children };
 	}
 }
 
@@ -1814,8 +1649,8 @@ class GenStateChooseNode extends GenStateNode {
 /**
  * @template { unknown[] } T
  * @typedef {{
- * 		[K in keyof T]: GenStateNode extends T[K] ? (GenStateNode | Text | CtxValueType<string>)
- * 		: GenStateTextNode extends T[K] ? (Text | CtxValueType<string>) : T[K];
+ * 		[K in keyof T]: T[K] extends GenStateTextNode ? (Text | CtxValueType<string>)
+ * 		: T[K] extends GenStateNode ? (GenStateNode | Text | CtxValueType<string>) : T[K];
  * }} TransformGenStateNodeToCtxChildType GenStateNodeからコンテキスト上の子要素の型へ変換
  */
 
@@ -1858,12 +1693,12 @@ class Context {
 	/**
 	 * コンストラクタ
 	 * @param { Context | undefined } ctx 生成元となるコンテキスト
-	 * @param { StateComponent<unknown> | undefined } parent 親コンポーネント
+	 * @param { ((ctx: Context) => StateComponent<unknown>) | undefined } gen コンポーネントを示すノードを生成する関数
 	 */
-	constructor(ctx = undefined, parent = undefined) {
-		if (ctx) {
+	constructor(ctx = undefined, gen = undefined) {
+		if (ctx && gen) {
 			this.#domUpdateController = ctx.#domUpdateController;
-			this.#component = new StateComponent(this, parent);
+			this.#component = gen(this);
 		}
 		else {
 			this.#domUpdateController = new DomUpdateController();
@@ -2053,27 +1888,26 @@ class Context {
 
 	/**
 	 * ノードリストを正規化する
-	 * @param { CtxChildType<'div'> } nodeList 対象のノード
-	 * @return { GenStateNode[] }
+	 * @template { string | ComponentType<K> } K
+	 * @param { CtxChildType<K> } nodeList 対象のノード
+	 * @returns { K extends string ? GenStateNode[] : CompChildrenType<K> }
 	 */
 	normalizeCtxChild(nodeList) {
-		const result = [];
-		nodeList.forEach(e => {
+		return nodeList.map(e => {
 			// 子にテキストの状態が渡された場合は変更を監視する
 			if (e instanceof IState) {
-				result.push(new GenStateTextNode(this, e));
+				return new GenStateTextNode(this, e);
 			}
 			else if (typeof e === 'string') {
-				result.push(new GenStateTextNode(this, e));
+				return new GenStateTextNode(this, e);
 			}
 			else if (e instanceof Text) {
-				result.push(new GenStateTextNode(this, e.data));
+				return new GenStateTextNode(this, e.data);
 			}
 			else {
-				result.push(e);
+				return e;
 			}
 		});
-		return result;
 	};
 
 	/**
@@ -2109,7 +1943,12 @@ class Context {
 		}
 		// コンポーネントによるDOMノード生成
 		else {
-			return new GenStateComponent(this, tag, _props, _children);
+			if (tag.early === true) {
+				return tag(this, _props, _children);
+			}
+			else {
+				return new GenStateComponent(this, tag, _props, _children);
+			}
 		}
 	}
 
@@ -2154,18 +1993,6 @@ class Context {
 	 */
 	html(element) {
 		return new GenStateHTMLElement(this, element);
-	}
-
-	/**
-	 * ノードを選択するノードの生成
-	 * @template T
-	 * @param { {} } props chooseについてのプロパティ(現在はなし)
-	 * @param { T } val 表示対象を切り替える基準となる変数
-	 * @param { StateChooseNodeChildType<T> } children valからDOMノードを選択するオブジェクト
-	 * @returns { StateChooseNode<T> }
-	 */
-	choose(props, val, children) {
-		return new GenStateChooseNode(this, props, val, children);
 	}
 
 	/**
@@ -2326,4 +2153,15 @@ function createWrapperFunction(f, component) {
 	}
 }
 
-export { GenStateNode, GenStateTextNode, Context, watch };
+export {
+	IState,
+	State,
+	StateNode,
+	StateComponent,
+	GenStateNode,
+	GetGenStateNode,
+	GenStateTextNode,
+	GenStateComponent,
+	Context,
+	watch
+};
