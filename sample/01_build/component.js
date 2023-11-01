@@ -1,4 +1,5 @@
 import { GenStateNode, Context } from "../../src/core.js";
+import { Choose, When } from "../lib/Choose.js";
 
 /**
  * @template T
@@ -65,8 +66,11 @@ function Main(ctx, props) {
 		ctx.$('hr'),
 		ctx.$('div', [
 			ctx.t`Count×2 is: ${() => cnt.value * 2}`,
-			ctx.choose({}, cnt, [
-				[cnt => cnt % 2 === 0, ctx.$('div', { style: { color: 'red' } }, [ctx.t`Cnt is even.`])]
+			ctx.$('div', { style: { color: 'red' } }, [
+				ctx.$(Choose, { target: cnt }, [
+					ctx.$(When, { test: cnt => cnt % 2 === 0 }, [ctx.t`Cnt is even.`]),
+					ctx.$(When, [ctx.t`Cnt is odd.`])
+				])
 			])
 		]),
 		ctx.$('div', [
