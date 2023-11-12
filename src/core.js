@@ -114,6 +114,12 @@ class IState {
 	 * @returns { { state: IState<T>; caller?: { caller: CallerType; states: State<unknown>[] }} } 呼び出し元情報
 	 */
 	unidirectional(ctx) { throw new Error('not implemented.'); }
+
+	/**
+	 * 状態変数が属するコンテキストの取得
+	 * @returns { Context | undefined }
+	 */
+	get ctx() { return undefined; }
 }
 
 /**
@@ -211,6 +217,9 @@ class State extends IState {
 	 */
 	set org(value) { this.#value = value; }
 
+	/**
+	 * 状態変数が属するコンテキストの取得
+	 */
 	get ctx() { return this.#ctx; }
 
 	/**
@@ -227,11 +236,6 @@ class State extends IState {
 	delete(caller) { return this.#callerList.delete(caller); }
 
 	/**
-	 * 状態変数の参照カウントを得る
-	 */
-	get count() { return this.#callerList.size; }
-
-	/**
 	 * 状態変数の参照が存在しだしたタイミングに1度のみ呼びだされるイベントの設定
 	 * @param { (val: State<T>) => unknown } callback イベントハンドラ
 	 */
@@ -245,7 +249,7 @@ class State extends IState {
 			callback(s);
 			return true;
 		};
-		if ((typeof this.#onreference === 'boolean') ? this.#onreference : (!this.#onreference && this.count > 0) || (this.#onreference && this.#onreference(this))) {
+		if ((typeof this.#onreference === 'boolean') ? this.#onreference : (!this.#onreference && this.#callerList.size > 0) || (this.#onreference && this.#onreference(this))) {
 			c(this);
 		}
 		else {
@@ -275,7 +279,7 @@ class State extends IState {
 			// もしくはstate.onreferenceなしでstateが2つ以上の参照をもつ(親への状態の伝播ありで状態の参照が存在する場合)
 			// もしくはonreference()の戻り値がtrue(親への状態の伝播ありで祖先で状態の参照が存在する場合)
 			// の場合に状態変数は利用されている
-			const flag = (typeof this.#onreference === 'boolean') ? this.#onreference : (!this.#onreference && this.count > 0) || (this.#onreference && this.#onreference(this));
+			const flag = (typeof this.#onreference === 'boolean') ? this.#onreference : (!this.#onreference && this.#callerList.size > 0) || (this.#onreference && this.#onreference(this));
 			caller.states.forEach(s => {
 				// 1つの状態を複数の状態変数が観測できるようにする
 				if (!s.#onreference) {
@@ -351,7 +355,23 @@ class Computed extends IState {
 		return { state: dest, caller: this.ctx.unidirectional(this, dest) };
 	}
 
+	/**
+	 * 状態変数が属するコンテキストの取得
+	 */
 	get ctx() { return this.#state.ctx; }
+
+	/**
+	 * 明示的に呼び出し元情報を追加する
+	 * @param { CallerType } caller 呼び出し元の関数
+	 */
+	add(caller) { this.#state.add(caller); }
+
+	/**
+	 * 明示的に呼び出し元情報を削除する
+	 * @param { CallerType } caller 呼び出し元の関数
+	 * @returns 
+	 */
+	delete(caller) { return this.#state.delete(caller); }
 }
 
 /**
@@ -365,13 +385,13 @@ class Computed extends IState {
  */
 
 /**
- * @template { (ctx: Context, props: CompPropTypes<K> extends {} ? ({} | undefined) : CompPropTypes<K>, children: CompChildrenType<K>) => GenStateNode | { node: GenStateNode; exposeStates?: Record<string, unknown> } } K
- * @typedef { (ctx: Context, props: CompPropTypes<K> extends {} ? ({} | undefined) : CompPropTypes<K>, children: CompChildrenType<K>) => GenStateNode | { node: GenStateNode; exposeStates?: Record<string, unknown> } } ComponentType コンポーネントの型
+ * @template { (ctx: Context, props: CompPropTypes<K> extends {} ? ({} | undefined) : CompPropTypes<K>, children: CompChildrenType<K> extends [] ? ([] | undefined) : CompChildrenType<K>) => GenStateNode | { node: GenStateNode; exposeStates?: Record<string, unknown> } } K
+ * @typedef { (ctx: Context, props: CompPropTypes<K> extends {} ? ({} | undefined) : CompPropTypes<K>, children: CompChildrenType<K> extends [] ? ([] | undefined) : CompChildrenType<K>) => GenStateNode | { node: GenStateNode; exposeStates?: Record<string, unknown> } } ComponentType コンポーネントの型
  */
 
 /**
- * @template { Function } T
- * @typedef { Parameters<T>[2] } CompChildrenType コンポーネントの子要素の型
+ * @template { (a?: unknown, b?: unknown, c?: unknown[]) => unknown } T
+ * @typedef { Parameters<T>[2] extends undefined ? [] : Parameters<T>[2] } CompChildrenType コンポーネントの子要素の型
  */
 
 /**
@@ -807,6 +827,140 @@ class GetGenStateNode extends GenStateNode {
 }
 
 /**
+ * ノードの集合
+ */
+class StateNodeSet {
+	/** @protected @type { (StateNode | StateNodeSet)[] } 管理しているネストを許容したノードの集合 */
+	nestedNodeSet = [];
+
+	/**
+	 * コンストラクタ
+	 * @param { (GenStateNode | GenStateNodeSet)[] } nestedNodeSet ネストを許容したノードの集合
+	 * @param { GenStateNode[] } sibling 構築結果の兄弟要素を格納する配列
+	 */
+	constructor(nestedNodeSet, sibling) {
+		for (const nestedNode of nestedNodeSet) {
+			if (nestedNode instanceof GenStateNode) {
+				// GenStateNodeの場合は後からノードをセットされるようにする
+				this.nestedNodeSet.push(undefined);
+				const i = this.nestedNodeSet.length - 1;
+				sibling.push(new GetGenStateNode(nestedNode, node => this.nestedNodeSet[i] = node));
+			}
+			else {
+				// GenStateNodeSetの場合はそれを評価してノードをセットする
+				const { set, sibling: sibling_ } = nestedNode.buildStateNodeSet();
+				this.nestedNodeSet.push(set);
+				sibling.push(...sibling_);
+			}
+		}
+	}
+
+	/**
+	 * ノードの集合の内最初のノードを取得
+	 * @returns { StateNode | undefined }
+	 */
+	get first() {
+		if (this.nestedNodeSet.length === 0) {
+			return undefined;
+		}
+		const node = this.nestedNodeSet[0];
+		return node instanceof StateNode ? node : node.first;
+	}
+
+	/**
+	 * ノードの集合の内最後のノードを取得
+	 * @returns { StateNode | undefined }
+	 */
+	get last() {
+		if (this.nestedNodeSet.length === 0) {
+			return undefined;
+		}
+		const node = this.nestedNodeSet[this.nestedNodeSet.length - 1];
+		return node instanceof StateNode ? node : node.last;
+	}
+
+	/**
+	 * StateNode全体を取得する
+	 * @returns { Generator<StateNode, void, unknown> }
+	 */
+	*nodeSet() {
+		for (const nestedNode of this.nestedNodeSet) {
+			if (nestedNode instanceof StateNode) {
+				yield nestedNode;
+			}
+			else {
+				yield* nestedNode.node();
+			}
+		}
+	}
+
+	/**
+	 * ノードの挿入
+	 * @param { HTMLElement | Text | undefined } element 挿入を行う前の要素
+	 * @param { HTMLElement } parent 挿入を行う親要素
+	 */
+	insertBefore(element, parent) {
+		for (const node of this.nodeSet()) {
+			const nodeElement = node.element;
+			if (nodeElement === element) {
+				do {
+					element = element?.nextSibling;
+				} while (element?.type === Node.COMMENT_NODE);
+			}
+			else {
+				parent.insertBefore(nodeElement, element);
+			}
+		}
+		return element;
+	}
+
+	/**
+	 * ノードの削除
+	 */
+	remove() {
+		for (const node of this.nodeSet()) {
+			node.remove();
+		}
+	}
+
+	/**
+	 * ノードの取り外し
+	 */
+	detach() {
+		for (const node of this.nodeSet()) {
+			node?.element?.remove();
+		}
+	}
+}
+
+/**
+ * ノードの集合を生成するためのノードの集合
+ */
+class GenStateNodeSet {
+	/** @protected @type { (GenStateNode | GenStateNodeSet)[] } 管理しているネストを許容したノードの集合 */
+	nestedNodeSet;
+
+	/**
+	 * コンストラクタ
+	 * @param { (GenStateNode | GenStateNodeSet)[] } nestedNodeSet ネストを許容したノードの集合
+	 */
+	constructor(nestedNodeSet) {
+		this.nestedNodeSet= nestedNodeSet;
+	}
+
+	/**
+	 * 保持しているノードの取得と構築
+	 * @returns { { set: StateNodeSet; sibling: GetGenStateNode[] } }
+	 */
+	buildStateNodeSet() {
+		/** @type { GetGenStateNode[] } */
+		const sibling = [];
+		const set = new StateNodeSet(this.nestedNodeSet, sibling);
+		return { set, sibling };
+	}
+}
+
+/**
  * 状態を持ったTextノード
  */
 class StateTextNode extends StateNode {
@@ -1035,7 +1189,7 @@ class GenStateDomNode extends GenStateNode {
 	#tag;
 	/** @type { CtxDomPropTypes<CreatedElementType<K>> } プロパティ */
 	#props;
-	/** @type { GenStateNode[] } 子要素 */
+	/** @type { (GenStateNode | GenStateNodeSet)[] } 子要素 */
 	#children;
 	/** @type { ObservableStates<K> | undefined } 観測する対象 */
 	#observableStates = undefined;
@@ -1047,7 +1201,7 @@ class GenStateDomNode extends GenStateNode {
 	 * @param { Context } ctx StateNodeを生成するコンテキスト
 	 * @param { K } tag HTMLタグ
 	 * @param { CtxDomPropTypes<CreatedElementType<K>> } props プロパティ
-	 * @param { GenStateNode[] } children 子要素
+	 * @param { (GenStateNode | GenStateNodeSet)[] } children 子要素
 	 */
 	constructor(ctx, tag, props, children) {
 		super(ctx);
@@ -1151,6 +1305,18 @@ class GenStateDomNode extends GenStateNode {
 			}
 		}
 
+		// 子要素の構築
+		/** @type { GenStateNode[] } */
+		const children = [];
+		for (const child of  this.#children) {
+			if (child instanceof GenStateNode) {
+				children.push(child);
+			}
+			else {
+				children.push(...child.buildStateNodeSet().sibling);
+			}
+		}
+
 		// 観測の評価
 		if (this.#observableStates) {
 			this.#observeImpl(this.#observableStates, element);
@@ -1158,7 +1324,7 @@ class GenStateDomNode extends GenStateNode {
 
 		this.#genFlag = true;
 
-		return { node: new StateDomNode(this.ctx, element, callerList), children: [...this.#children] };
+		return { node: new StateDomNode(this.ctx, element, callerList), children };
 	}
 
 	/**
@@ -1338,30 +1504,19 @@ class StateComponent extends StateNode {
 	/**
 	 * コンポーネントを構築する
 	 * @param { K } component コンポーネントを示す関数
-	 * @param { CtxCompPropTypes<K> } props プロパティ
-	 * @param { GenStateNode[] } children 子要素
+	 * @param { CompPropTypes<K> } props プロパティ
+	 * @param { CompChildrenType<K> } children 子要素
 	 * @param { ObservableStates<K> | undefined } observableStates 観測する対象
 	 * @return {{ gen: GenStateNode; children: GenStateNode[] }}
 	 */
 	build(component, props, children, observableStates) {
 		/** @type { CompPropTypes<K> } コンポーネントに渡すプロパティ */
 		const compProps = {};
-		for (const key in component.propTypes ?? {}) {
-			const val = props[key];
-			// 渡されたプロパティが状態変数なら単方向データに変換して渡すようにする
-			if (val instanceof IState) {
-				const { state, caller } = val.unidirectional(this.ctx);
-				if (caller && caller.states.length > 0) this.callerList.push(caller);
-				compProps[key] = state;
-			}
-			else {
-				// 値が与えられなかった場合はデフォルト値から持ってくる
-				const val2 = val === undefined || val === null || val === false ? component.propTypes[key] : val;
-				if (val2 !== undefined && val2 !== null && val2 !== false) {
-					// IStateとなるように伝播
-					compProps[key] = new NotState(val2);
-				}
-			}
+		// プロパティは単方向データに変換して渡すようにする
+		for (const key in props) {
+			const { state, caller } = props[key].unidirectional(this.ctx);
+			if (caller && caller.states.length > 0) this.callerList.push(caller);
+			compProps[key] = state;
 		}
 
 		// ノードの生成
@@ -1507,9 +1662,9 @@ class StateComponent extends StateNode {
 class GenStateComponent extends GenStateNode {
 	/** @protected @type { K } コンポーネントを示す関数 */
 	component;
-	/** @protected @type { CtxCompPropTypes<K> } プロパティ */
+	/** @protected @type { CompPropTypes<K> } プロパティ */
 	props;
-	/** @protected @type { GenStateNode[] } 子要素 */
+	/** @protected @type { CompChildrenType<K> } 子要素 */
 	children;
 	/** @protected @type { ObservableStates<K> | undefined } 観測する対象 */
 	observableStates = undefined;
@@ -1520,8 +1675,8 @@ class GenStateComponent extends GenStateNode {
 	 * コンストラクタ
 	 * @param { Context } ctx StateNodeを生成するコンテキスト
 	 * @param { K } component コンポーネントを示す関数
-	 * @param { CtxCompPropTypes<K> } props プロパティ
-	 * @param { CtxChildType<K> } children 子要素
+	 * @param { CompPropTypes<K> } props プロパティ
+	 * @param { CompChildrenType<K> } children 子要素
 	 */
 	constructor(ctx, component, props, children) {
 		super(ctx);
@@ -1641,7 +1796,7 @@ class GenStateComponent extends GenStateNode {
 /**
  * @template { string | ComponentType<K> } K
  * @typedef { K extends string
- * 		? (GenStateNode | Text | CtxValueType<string>)[]
+ * 		? (GenStateNode | Text | CtxValueType<string> | GenStateNodeSet)[]
  * 		: Parameters<K>[2] extends undefined ? [] : TransformGenStateNodeToCtxChildType<Parameters<K>[2]>
  * } CtxChildType コンテキスト上での子要素の型
  */
@@ -1890,10 +2045,10 @@ class Context {
 	 * ノードリストを正規化する
 	 * @template { string | ComponentType<K> } K
 	 * @param { CtxChildType<K> } nodeList 対象のノード
-	 * @returns { K extends string ? GenStateNode[] : CompChildrenType<K> }
+	 * @returns { K extends string ? (GenStateNode | GenStateNodeSet)[] : CompChildrenType<K> }
 	 */
 	normalizeCtxChild(nodeList) {
-		return nodeList.map(e => {
+		return Array.isArray(nodeList) ? nodeList.map(e => {
 			// 子にテキストの状態が渡された場合は変更を監視する
 			if (e instanceof IState) {
 				return new GenStateTextNode(this, e);
@@ -1907,8 +2062,31 @@ class Context {
 			else {
 				return e;
 			}
-		});
+		}) : nodeList;
 	};
+
+	/**
+	 * プロパティを正規化する
+	 * @template { ComponentType<K> } K
+	 * @param { K } component コンポーネントを示す関数
+	 * @param { CtxCompPropTypes<K> } props 変換対象のプロパティ
+	 */
+	normalizeCtxProps(component, props) {
+		/** @type { CompPropTypes<K> } コンポーネントに渡すプロパティ */
+		const compProps = {};
+		// IStateによる連想配列へ変換
+		for (const key in component.propTypes ?? {}) {
+			const val = props[key];
+			if (val instanceof IState) {
+				compProps[key] = val;
+			}
+			else {
+				// 値が与えられなかった場合はデフォルト値から持ってきてIStateとなるように伝播
+				compProps[key] = new NotState(val === undefined ? component.propTypes[key] : val);
+			}
+		}
+		return compProps;
+	}
 
 	/**
 	 * @template { string | ComponentType<K> } K
@@ -1943,11 +2121,13 @@ class Context {
 		}
 		// コンポーネントによるDOMノード生成
 		else {
+			const compProps = this.normalizeCtxProps(tag, _props);
+
 			if (tag.early === true) {
-				return tag(this, _props, _children);
+				return tag(this, compProps, _children);
 			}
 			else {
-				return new GenStateComponent(this, tag, _props, _children);
+				return new GenStateComponent(this, tag, compProps, _children);
 			}
 		}
 	}
@@ -2078,29 +2258,33 @@ class Context {
 /**
  * @template T
  * @overload
- * @param { State<T> } state 監視を行う状態変数
+ * @param { IState<T> } state 監視を行う状態変数
  * @param { (prev: T, next: T) => unknown } f ウォッチャー
  * @returns { CallerType }
  */
 /**
  * @template T
  * @overload
- * @param { State<unknown>[] } state 監視を行う状態変数のリスト
+ * @param { IState<unknown>[] } state 監視を行う状態変数のリスト
  * @param { () => unknown } f ウォッチャー
  * @returns { CallerType }
  */
 /**
  * ウォッチャーの宣言
  * @template T
- * @param { State<unknown>[] | State<T> } state 監視を行う状態変数
+ * @param { IState<unknown>[] | IState<T> } state 監視を行う状態変数
  * @param { (() => unknown) | ((prev: T, next: T) => unknown) } f ウォッチャー
- * @returns { CallerType }
+ * @returns { CallerType | undefined }
  */
 function watch(state, f) {
-	if (state instanceof State) {
+	if (state instanceof IState) {
 		let prevState =  state.value;
 		let nextState = state.value;
-		const component = state.ctx.component;
+		const ctx = state.ctx;
+		if (ctx === undefined) {
+			return undefined;
+		}
+		const component = ctx.component;
 
 		/** @type { CallerType } */
 		const caller =
@@ -2118,10 +2302,15 @@ function watch(state, f) {
 		return caller;
 	}
 	else {
+		/** @type { Context[] } */
+		const ctxList = state.filter(s => s.ctx).map(s => s.ctx);
+		if (ctxList.length === 0) {
+			return undefined;
+		}
 		// 一番最初に発見した有効なコンポーネントを通知先とする
-		const component = state.find(s => s.ctx.component)?.ctx?.component;
+		const component = ctxList.find(ctx => ctx.component)?.ctx?.component;
 		/** @type { CallerType } */
-		const caller = { caller: component ?  createWrapperFunction(f, component) : f };
+		const caller = { caller: component ? createWrapperFunction(f, component) : f };
 		state.forEach(s => s.add(caller));
 		return caller;
 	}
@@ -2157,9 +2346,11 @@ export {
 	IState,
 	State,
 	StateNode,
+	StateNodeSet,
 	StateComponent,
 	GenStateNode,
 	GetGenStateNode,
+	GenStateNodeSet,
 	GenStateTextNode,
 	GenStateComponent,
 	Context,
