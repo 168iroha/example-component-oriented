@@ -10,10 +10,6 @@ import { State, StateNodeSet, GenStateNode, GenStateNodeSet, GenStateTextNode, G
  * @template T
  */
 class VariableStateNodeSet extends StateNodeSet {
-	/** @type { CompPropTypes<typeof ForEach<T>> } プロパティ */
-	#props;
-	/** @type { (v: T, key?: unknown, genkey?: (typeof ForEach['propTypes']['key'])) => (GenStateNode | GenStateNodeSet)[] } ノードを生成する関数 */
-	#gen;
 	/** @type { Map<unknown, StateNodeSet> } 現在のノードの集合のキーのリスト */
 	#keyList = new Map();
 	/** @type { { caller: CallerType; states: State<unknown>[] }[] } 呼び出し元のリスト(これの破棄により親との関連付けが破棄される) */
@@ -28,10 +24,8 @@ class VariableStateNodeSet extends StateNodeSet {
 	 */
 	constructor(sibling, ctx, props, gen) {
 		super([], sibling);
-		this.#props = props;
-		this.#gen = gen;
 		// 表示対象の更新時にその捕捉を行う
-		const caller = watch(this.#props.target, (prev, next) => {
+		const caller = watch(props.target, (prev, next) => {
 			// DOMノードが構築されている場合にのみ構築する(this.first.element自体はplaceholderにより(外部から操作しない限り)存在が保証される)
 			const element = this.first?.element;
 			if (element && !(prev.length === 0 && prev.length === next.length)) {
@@ -44,7 +38,7 @@ class VariableStateNodeSet extends StateNodeSet {
 				// 挿入を行うノードの全体の構築
 				for (let i = 0; i < next.length; ++i) {
 					const e = next[i];
-					const key = this.#props.key.value(e);
+					const key = props.key.value(e);
 					if (this.#keyList.has(key)) {
 						// 現在表示している対象の表示の場合はノードを移動させる
 						const set = this.#keyList.get(key);
@@ -58,7 +52,7 @@ class VariableStateNodeSet extends StateNodeSet {
 							throw new Error(`Key ${key} is duplicated.`);
 						}
 						// 現在表示していない対象を表示する場合は構築する
-						const { set, sibling } = (new GenStateNodeSet(ctx.normalizeCtxChild(this.#gen(e, key, this.#props.key.value)))).buildStateNodeSet();
+						const { set, sibling } = (new GenStateNodeSet(ctx.normalizeCtxChild(gen(e, key, props.key.value)))).buildStateNodeSet();
 						keyList.set(key, set);
 						nodeSetList.push(set);
 						for (const s of sibling) {
@@ -72,11 +66,11 @@ class VariableStateNodeSet extends StateNodeSet {
 				}
 				const deleteNodeSet = [...this.#keyList.values()];
 				this.#keyList = keyList;
+				/** @type { HTMLElement | Text | undefined } 挿入位置 */
+				let afterElement = this.first?.element;
 				this.nestedNodeSet = nodeSetList;
 
 				if (parent) {
-					/** @type { HTMLElement | Text | undefined } 挿入位置 */
-					let afterElement = this.first?.element;
 					// DOMノードの更新
 					ctx.component.label.update(() => {
 						// ノードの挿入
@@ -96,9 +90,9 @@ class VariableStateNodeSet extends StateNodeSet {
 		}
 
 		// 初期状態の構築
-		for (const e of this.#props.target.value) {
-			const key = this.#props.key.value(e);
-			const { set, sibling: sibling_ } = (new GenStateNodeSet(ctx.normalizeCtxChild(this.#gen(e, key, this.#props.key.value)))).buildStateNodeSet();
+		for (const e of props.target.value) {
+			const key = props.key.value(e);
+			const { set, sibling: sibling_ } = (new GenStateNodeSet(ctx.normalizeCtxChild(gen(e, key, props.key.value)))).buildStateNodeSet();
 			this.#keyList.set(key, set);
 			this.nestedNodeSet.push(set);
 			sibling.push(...sibling_);
@@ -152,7 +146,7 @@ class GenVariableStateNodeSet extends GenStateNodeSet {
 }
 
 /**
- * 可変なノードを扱うコンポーネント
+ * 可変なノードを扱う擬似コンポーネント
  * @template T
  * @param { Context } ctx
  * @param { CompPropTypes<typeof ForEach<T>> } props 
@@ -171,6 +165,7 @@ ForEach.propTypes = {
 	/** @type { (val: T) => unknown } 表示対象を切り替える基準となる変数 */
 	key: undefined,
 };
+/** @type { true } */
 ForEach.early = true;
 
 export { ForEach };

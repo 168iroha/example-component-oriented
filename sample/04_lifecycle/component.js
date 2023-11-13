@@ -1,5 +1,5 @@
 import { GenStateNode, Context } from "../../src/core.js";
-import { When } from "../lib/Choose.js";
+import { Choose, When } from "../lib/Choose.js";
 
 /**
  * @template T
@@ -90,8 +90,8 @@ function Main(ctx, props) {
 		ctx.$(CountButton, { onclick: () => ++cnt.value }, [
 			ctx.t`CountUp`
 		]),
-		ctx.$(When, { test: () => cnt.value % 5 !== 1 }, [
-			ctx.$(ShowCount, { cnt })
+		ctx.$(Choose, { target: cnt }, [
+			ctx.$(When, { test: cnt => cnt % 5 !== 1 }, () => [ctx.$(ShowCount, { cnt })]),
 		])
 	]);
 }

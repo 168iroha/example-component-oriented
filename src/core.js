@@ -1767,7 +1767,7 @@ class GenStateComponent extends GenStateNode {
 
 /**
  * @template T
- * @typedef { { [K in keyof T]: CtxValueType<T[K] | null | undefined> } } CtxPropTypes コンテキスト上でのプロパティの型
+ * @typedef { { [K in keyof T]: CtxValueType<T[K] | null | undefined> } } CtxPropTypesImpl コンテキスト上でのプロパティの型の連想配列を構成する部分
  */
 
 /**
@@ -1787,10 +1787,20 @@ class GenStateComponent extends GenStateNode {
 
 /**
  * @template { HTMLElement } T
- * @typedef { CtxPropTypes<
+ * @typedef { CtxPropTypesImpl<
  * 		RemoveReadonlyProperty<RemoveFunction<T>> &
- * 		{ style: CtxPropTypes<CamelToKebabObject<RemoveReadonlyProperty<RemoveFunction<CSSStyleDeclaration>>> & Record<string, string>> }
+ * 		{ style: CtxPropTypesImpl<CamelToKebabObject<RemoveReadonlyProperty<RemoveFunction<CSSStyleDeclaration>>> & Record<string, string>> }
  * > } CtxDomPropTypes コンテキスト上でのDOMのプロパティの型
+ */
+
+/**
+ * @template { string | ComponentType<K> } K
+ * @typedef { K extends string ? CtxDomPropTypes<CreatedElementType<K>> : CtxCompPropTypes<K> } CtxPropTypes コンテキスト上でのプロパティの型
+ */
+
+/**
+ * @template { Record<unknown, unknown> } T
+ * @typedef {{ [K in keyof T as undefined extends T[K] ? never : K]: T[K] }} RequiredCtxPropTypes コンテキスト上での必須なプロパティの型
  */
 
 /**
@@ -1799,6 +1809,11 @@ class GenStateComponent extends GenStateNode {
  * 		? (GenStateNode | Text | CtxValueType<string> | GenStateNodeSet)[]
  * 		: Parameters<K>[2] extends undefined ? [] : TransformGenStateNodeToCtxChildType<Parameters<K>[2]>
  * } CtxChildType コンテキスト上での子要素の型
+ */
+
+/**
+ * @template T
+ * @typedef { T  extends unknown[] ? number extends T['length'] ? [] : T : T } RequiredCtxChildType コンテキスト上での必須な子要素の型
  */
 
 /**
@@ -2092,29 +2107,30 @@ class Context {
 	 * @template { string | ComponentType<K> } K
 	 * @overload
 	 * @param { K } tag HTMLタグ
-	 * @param { K extends string ? CtxDomPropTypes<CreatedElementType<K>> : CtxCompPropTypes<K> } props プロパティ
-	 * @param { CtxChildType<K> } children 子要素
-	 * @returns { K extends string ? GenStateDomNode<K> : GenStateComponent<K> }
+	 * @param { RequiredCtxPropTypes<CtxPropTypes<K>> extends {} ? CtxPropTypes<K> | undefined : CtxPropTypes<K> } props プロパティ
+	 * @param { RequiredCtxChildType<CtxChildType<K>> extends [] ? CtxChildType<K> | undefined : CtxChildType<K> } children 子要素
+	 * @returns { K extends string ? GenStateDomNode<K> : (true extends K['early'] ? ReturnType<K> : GenStateComponent<K>) }
 	 */
 	/**
 	 * @template { string | ComponentType<K> } K
 	 * @overload
-	 * @param { K } tag HTMLタグ
-	 * @param { CtxChildType<K> } props 子要素
-	 * @param { [] } children 略
-	 * @returns { K extends string ? GenStateDomNode<K> : GenStateComponent<K> }
+	 * @param { RequiredCtxPropTypes<CtxPropTypes<K>> extends {} ? K : never } tag HTMLタグ
+	 * @param { RequiredCtxPropTypes<CtxPropTypes<K>> extends {} ? CtxChildType<K> : never } props 子要素
+	 * @param { RequiredCtxPropTypes<CtxPropTypes<K>> extends {} ? undefined : never } children 略
+	 * @returns { K extends string ? GenStateDomNode<K> : (true extends K['early'] ? ReturnType<K> : GenStateComponent<K>) }
 	 */
 	/**
 	 * DOMノード/コンポーネントの生成
 	 * @template { string | ComponentType<K> } K
 	 * @param { K } tag HTMLタグ
-	 * @param { (K extends string ? CtxDomPropTypes<CreatedElementType<K>> : CtxCompPropTypes<K>) | CtxChildType<K> } props プロパティ
+	 * @param { CtxPropTypes<K> | CtxChildType<K> | undefined } props プロパティ
 	 * @param { CtxChildType<K> | undefined } children 子要素
-	 * @returns { K extends string ? GenStateDomNode<K> : GenStateComponent<K> }
+	 * @returns { K extends string ? GenStateDomNode<K> : (true extends K['early'] ? ReturnType<K> : GenStateComponent<K>) }
 	 */
-	$(tag, props = {}, children = []) {
-		const _props = Array.isArray(props) ? {} : props;
-		const _children = this.normalizeCtxChild(Array.isArray(props) ? props : children);
+	$(tag, props = undefined, children = undefined) {
+		const isProps = props?.constructor?.name === 'Object';
+		const _props = isProps ? props : {};
+		const _children = this.normalizeCtxChild((!isProps ? props : children) ?? []);
 		// HTMLタグによるDOMノードの生成(Web Componentsも含む)
 		if (typeof tag === 'string') {
 			return new GenStateDomNode(this, tag, _props, _children);
