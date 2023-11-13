@@ -1,4 +1,4 @@
-import { State, StateNode, StateComponent, GenStateNode, GenStateTextNode, GetGenStateNode, GenStateComponent, Context } from "../../src/core.js";
+import { State, StateNodeSet, GenStateNode, GenStateNodeSet, GenStateTextNode, GetGenStateNode, Context, watch } from "../../src/core.js";
 
 /**
  * @template T
@@ -6,80 +6,47 @@ import { State, StateNode, StateComponent, GenStateNode, GenStateTextNode, GetGe
  */
 
 /**
+ * StateNodeSetを選択するノード
  * @template T
- * @typedef { import("../../src/core.js").ComponentType<T> } ComponentType コンポーネントの型
  */
-
-/**
- * @template T
- * @typedef { import("../../src/core.js").CtxCompPropTypes<T> } CtxCompPropTypes コンテキスト上でのコンポーネントのプロパティの型
- */
-
-/**
- * @template T
- * @typedef { import("../../src/core.js").ElementTypeOfState<T> } ElementTypeOfState 状態変数の要素型を得る
- */
-
-/**
- * @template { string | ComponentType<K> } K
- * @typedef { import("../../src/core.js").ObservableStates<T> } ObservableStates 観測可能な状態
- */
-
-/**
- * @template T
- * @typedef { ([((val: ElementTypeOfState<T>) => boolean) | (() => boolean) | undefined, ((val: ElementTypeOfState<T>) => GenStateNode) | GenStateNode])[] } StateChooseNodeChildType StateChooseNodeで用いる子要素の型
- */
-
-/**
- * ノードを状態変化により表示・非表示にするノード
- * @template T
- * @extends { StateComponent<typeof When<T>> }
- */
-class StateWhenNode extends StateComponent {
-	/** @type { StateNode | undefined } プレースホルダとして表示する要素 */
-	#placeholder = undefined;
-	/** @type { StateNode | undefined } 表示・非表示の切り替え対象となる要素 */
-	#content = undefined;
+class ShowStateNodeSet extends StateNodeSet {
+	/** @type { { caller: CallerType; states: State<unknown>[] }[] } 呼び出し元のリスト(これの破棄により親との関連付けが破棄される) */
+	callerList = [];
 
 	/**
-	 * コンポーネントを構築する
-	 * @param { typeof When<T> } component コンポーネントを示す関数
-	 * @param { CtxCompPropTypes<typeof When<T>> } props プロパティ
-	 * @param { GenStateWhenNode[] } children 子要素
-	 * @param { ObservableStates<K> | undefined } observableStates 観測する対象
-	 * @return {{ gen: GenStateNode; children: GenStateNode[] }}
+	 * コンストラクタ
+	 * @param { GenStateNode[] } sibling 構築結果の兄弟要素を格納する配列
+	 * @param { Context } ctx 状態変数を扱っているコンテキスト
+	 * @param { CompPropTypes<typeof When<T>> } props 
+	 * @param { (v: T) => (GenStateNode | GenStateNodeSet)[] } gen
 	 */
-	build(component, props, children, observableStates) {
-		const placeholder = new GenStateTextNode(this.ctx, '');
-		const computed = this.ctx.computed(() => props?.test?.() === true);
-		// 表示対象の切り替えを行う
-		const caller = this.ctx.call(() => {
-			// DOMノードが構築されたことがある場合にのみ構築する
-			const element = this.element;
-			const parent = element?.parentElement;
-			const val = computed.value;
-			if (element) {
-				const nextSibling = element.nextElementSibling;
-				const prevNode = this.node;
+	constructor(sibling, ctx, props, gen) {
+		super([], sibling);
+		// 表示対象の更新時にその捕捉を行う
+		const caller = watch(props.target, (prev, next) => {
+			// DOMノードが構築されたことがあるかつ状態変数が有効な場合にのみ構築する
+			const element = this.first?.element;
+			if (element && next !== undefined) {
+				const parent = element.parentElement;
+				const deleteNodeSet = this.nestedNodeSet;
+				// ノードの選択
+				const flag = props.test.value === undefined || props.test.value(next);
 				// 表示する要素が存在しないときは代わりにプレースホルダとして空のTextを表示
-				this.genStateNode = computed.value ? children[0] instanceof Function ? children[0]() : children[0] : placeholder;
-
-				// ノードの再構築が生じないように付け替えるだけにする
-				const stateComponent = this.parent ?? this;
-				if (val) {
-					this.#placeholder = prevNode;
-					this.node = this.#content ?? this.genStateNode.build(stateComponent);
-				}
-				else {
-					this.#content = prevNode;
-					this.node = this.#placeholder ?? this.genStateNode.build(stateComponent);
+				const { set, sibling } = (new GenStateNodeSet(ctx.normalizeCtxChild(flag ? gen(next) : [new GenStateTextNode(ctx, '')]))).buildStateNodeSet();
+				/** @type { HTMLElement | Text | undefined } 挿入位置 */
+				const afterElement = this.first?.element;
+				this.nestedNodeSet = [set];
+				for (const s of sibling) {
+					s.build(ctx.component);
 				}
 				if (parent) {
-					// 初期表示以降はDOMの更新する関数を通して構築する
-					const insertElement = this.element;
-					stateComponent.label.update(() => {
-						prevNode?.element?.remove();
-						parent.insertBefore(insertElement, nextSibling);
+					ctx.component.label.update(() => {
+						// ノードの挿入
+						set.insertBefore(afterElement, parent);
+						// ノードの削除
+						for (const set of deleteNodeSet) {
+							set.remove();
+						}
 					});
 				}
 			}
@@ -88,123 +55,149 @@ class StateWhenNode extends StateComponent {
 			this.callerList.push(caller);
 		}
 
-		/** @type { GenStateNode } 初期表示の設定 */
-		this.genStateNode = computed.value ? children[0] instanceof Function ? children[0]() : children[0] : placeholder;
+		// 初期表示の設定
+		{
+			const val = props.target.value;
+			const flag = val !== undefined && (props.test.value === undefined || props.test.value(val));
+			// 表示する要素が存在しないときは代わりにプレースホルダとして空のTextを表示
+			const { set, sibling: sibling_ } = (new GenStateNodeSet(ctx.normalizeCtxChild(flag ? gen(next) : [new GenStateTextNode(ctx, '')]))).buildStateNodeSet();
+			this.nestedNodeSet = [set];
+			sibling.push(...sibling_);
+		}
+	}
 
-		return this.buildRepComponent(this.genStateNode);
+	/**
+	 * ノードの削除
+	 */
+	remove() {
+		super.remove();
+		this.callerList.forEach(caller => caller.states.forEach(state => state.delete(caller.caller)));
 	}
 }
 
 /**
- * StateChooseNodeを生成するためのノード
+ * ShowStateNodeSetを生成するためのノードの集合
  * @template T
- * @extends { GenStateComponent<typeof When<T>> }
  */
-class GenStateWhenNode extends GenStateComponent {
+class GenShowStateNodeSet extends GenStateNodeSet {
+	/** @type { Context } props.targetの扱っているコンテキスト */
+	#ctx;
+	/** @type { CompPropTypes<typeof When<T>> } プロパティ */
+	#props;
+	/** @type { (v: T) => (GenStateNode | GenStateNodeSet)[] } ノードを生成する関数 */
+	#gen;
+
+	/**
+	 * コンストラクタ
+	 * @param { Context } ctx 状態変数を扱っているコンテキスト
+	 * @param { CompPropTypes<typeof When<T>> } props 
+	 * @param { (v: T) => (GenStateNode | GenStateNodeSet)[] } gen
+	 */
+	constructor(ctx, props, gen) {
+		super([]);
+		this.#ctx = ctx;
+		this.#props = props;
+		this.#gen = gen;
+	}
+
 	/**
 	 * 表示判定を行うテスト関数の取得
 	 */
 	get test() {
-		return this.props.test;
+		return this.#props.test;
 	}
 
 	/**
-	 * 表示を行うノードの取得
+	 * ノードを生成する関数の取得
 	 */
-	get child() {
-		return this.children[0];
+	get gen() {
+		return this.#gen;
 	}
 
 	/**
-	 * 別物のStateNodeを生成しても問題のないGetStateNodeを生成
-	 * @returns { GenStateWhenNode<T> }
+	 * 保持しているノードの取得と構築
+	 * @returns { { set: ShowStateNodeSet<T>; sibling: GetGenStateNode[] } }
 	 */
-	clone() {
-		return new GenStateWhenNode(this.ctx, this.component, this.props, this.children);
-	}
-
-	/**
-	 * コンポーネントが属するコンテキストを生成し、それをもつコンポーネントを返す
-	 * @protected
-	 * @template { ComponentType<K> } K
-	 * @param { StateComponent<K> | undefined } stateComponent ノードを生成する場所
-	 * @returns { StateWhenNode<T> }
-	 */
-	buildContext(stateComponent) {
-		if (stateComponent) {
-			// 親コンポーネントが存在すればコンテキストを継承する
-			const ctx = stateComponent.ctx;
-			return new StateWhenNode(ctx, stateComponent);
-		}
-		else {
-			// StateComponentと同一の生成規則を適用
-			const ctx = new Context(stateComponent.ctx ? stateComponent.ctx : this.ctx, ctx => new StateWhenNode(ctx, stateComponent));
-			return ctx.component;
-		}
+	buildStateNodeSet() {
+		/** @type { GetGenStateNode[] } */
+		const sibling = [];
+		const set = new ShowStateNodeSet(sibling, this.#ctx, this.#props, this.#gen);
+		return { set, sibling };
 	}
 }
 
 /**
- * ノードの選択における条件式を設定するコンポーネント
+ * ノードの選択における条件式を設定する擬似コンポーネント
  * @template T
  * @param { Context } ctx
  * @param { CompPropTypes<typeof When<T>> } props 
- * @param { [(StateChooseNodeChildType<T>[number][1])] } children
+ * @param { (v: T) => (GenStateNode | GenStateNodeSet)[] } children
  * @returns 
  */
 function When(ctx, props, children) {
-	return new GenStateWhenNode(ctx, When, props, children);
+	return new GenShowStateNodeSet(ctx, props, children)
 }
 /**
  * @template T
  */
 When.propTypes = {
+	/** @type { T | undefined } 表示対象を切り替える基準となる変数 */
+	target: undefined,
 	/** @type { ((val: T) => boolean) | undefined } 表示判定を行うテスト関数 */
 	test: undefined
 };
+/** @type { true } */
 When.early = true;
 
 /**
- * ノードを選択するノード
+ * ShowStateNodeSetを選択するノード
  * @template T
- * @extends { StateComponent<typeof Choose<T>> }
  */
-class StateChooseNode extends StateComponent {
+class WhenStateNodeSet extends StateNodeSet {
 	/** @type { number } 前回選択した要素のインデックス */
-	#prevChooseIndex = -1;
+	#prevChooseIndex = -2;
+	/** @type { CompPropTypes<typeof Choose<T>> } プロパティ */
+	#props;
+	/** @type { { caller: CallerType; states: State<unknown>[] }[] } 呼び出し元のリスト(これの破棄により親との関連付けが破棄される) */
+	callerList = [];
 
 	/**
-	 * コンポーネントを構築する
-	 * @param { typeof Choose<T> } component コンポーネントを示す関数
-	 * @param { CtxCompPropTypes<typeof Choose<T>> } props プロパティ
-	 * @param { GenStateWhenNode[] } children 子要素
-	 * @param { ObservableStates<K> | undefined } observableStates 観測する対象
-	 * @return {{ gen: GenStateNode; children: GenStateNode[] }}
+	 * コンストラクタ
+	 * @param { GenStateNode[] } sibling 構築結果の兄弟要素を格納する配列
+	 * @param { Context } ctx 状態変数を扱っているコンテキスト
+	 * @param { CompPropTypes<typeof Choose<T>> } props 
+	 * @param { GenShowStateNodeSet<T>[] } nestedNodeSet
 	 */
-	build(component, props, children, observableStates) {
-		// When(children)を評価する
-		const whenList = children.map(genWhen => [genWhen.test, genWhen.child]);
-		// 表示対象の切り替えを行う
-		const caller = this.ctx.setParam(props.target, val => {
+	constructor(sibling, ctx, props, nestedNodeSet) {
+		super([], sibling);
+		this.#props = props;
+		// 表示対象の更新時にその捕捉を行う
+		const caller = watch(this.#props.target, (prev, next) => {
 			// DOMノードが構築されたことがある場合にのみ構築する
-			const element = this.element;
+			const element = this.first?.element;
 			if (element) {
 				const parent = element.parentElement;
-				const nextSibling = element.nextElementSibling;
-				const prevNode = this.node;
 				// 表示する要素が存在しないときは代わりにプレースホルダとして空のTextを表示
-				this.genStateNode = this.#chooseNode(val, whenList);
+				const genStateNodeSet = this.#chooseNode(ctx, next, nestedNodeSet);
 
-				if (this.genStateNode) {
-					const stateComponent = this.parent ?? this;
+				if (genStateNodeSet) {
 					// ノードを構築
-					this.node = this.genStateNode.build(stateComponent);
+					const { set, sibling } = genStateNodeSet.buildStateNodeSet();
+					const deleteNodeSet = this.nestedNodeSet;
+					/** @type { HTMLElement | Text | undefined } 挿入位置 */
+					const afterElement = this.first?.element;
+					this.nestedNodeSet = [set];
+					for (const s of sibling) {
+						s.build(ctx.component);
+					}
 					if (parent) {
-						// 初期表示以降はDOMの更新する関数を通して構築する
-						const insertElement = this.element;
-						stateComponent.label.update(() => {
-							prevNode?.remove();
-							parent.insertBefore(insertElement, nextSibling);
+						ctx.component.label.update(() => {
+							// ノードの挿入
+							set.insertBefore(afterElement, parent);
+							// ノードの削除
+							for (const set of deleteNodeSet) {
+								set.remove();
+							}
 						});
 					}
 				}
@@ -214,100 +207,98 @@ class StateChooseNode extends StateComponent {
 			this.callerList.push(caller);
 		}
 
-		/** @type { GenStateNode } 初期表示の設定 */
-		this.genStateNode = this.#chooseNode(this.ctx.useParam(props.target), whenList);
-
-		return this.buildRepComponent(this.genStateNode);
+		/** @type { GenStateNodeSet } 初期表示の設定 */
+		const genStateNode = this.#chooseNode(ctx, props.target.value, nestedNodeSet);
+		const { set, sibling: sibling_ } = genStateNode.buildStateNodeSet();
+		this.nestedNodeSet = [set];
+		sibling.push(...sibling_);
 	}
 
 	/**
-	 * childrenからノードを選択する
-	 * @param { ElementTypeOfState<T> } val 表示対象を切り替える基準となる変数
-	 * @param { StateChooseNodeChildType<T> } children valからDOMノードを選択するオブジェクト
+	 * ノードの削除
 	 */
-	#chooseNode(val, children) {
-		/** @type { [] | [GenStateNode] } */
-		let nodeList = [];
+	remove() {
+		super.remove();
+		this.callerList.forEach(caller => caller.states.forEach(state => state.delete(caller.caller)));
+	}
+
+	/**
+	 * nestedNodeSetからノードを選択する
+	 * @param { Context } ctx 状態変数を扱っているコンテキスト
+	 * @param { T } val 表示対象を切り替える基準となる変数
+	 * @param { GenShowStateNodeSet<T>[] } nestedNodeSet valからDOMノードを選択するオブジェクト
+	 */
+	#chooseNode(ctx, val, nestedNodeSet) {
 		let i = 0;
-		let genStateNodeFlag = false;
-		for (; i < children.length; ++i) {
-			const child = children[i];
+		for (; i < nestedNodeSet.length; ++i) {
+			const child = nestedNodeSet[i];
 			// 条件式が設定されていないもしくは条件式が真の場合
-			if (child[0] === undefined || child[0](val)) {
-				const c = child[1];
-				genStateNodeFlag = c instanceof GenStateNode;
-				nodeList = this.ctx.normalizeCtxChild([genStateNodeFlag ? c : c(val)]);
+			if (child.test.value === undefined || child.test.value(val)) {
 				break;
 			}
 		}
 		// ノードが選択されなかった場合はインデックスを-1に統一
-		if (nodeList.length === 0) {
+		if (i === nestedNodeSet.length) {
 			i = -1;
 		}
 
-		// 選択したノードに変化があるもしくは関数により生成された場合は新規ノードを生成
-		if (i !== this.#prevChooseIndex || !genStateNodeFlag) {
+		// 選択したノードに変化がある場合は新規ノードを生成
+		if (i !== this.#prevChooseIndex) {
 			this.#prevChooseIndex = i;
 			if (i === -1) {
 				// 表示する要素が存在しないときは代わりにプレースホルダとして空のTextを表示
-				return new GenStateTextNode(this.ctx, '');
+				return new GenStateNodeSet([new GenStateTextNode(ctx, '')]);
 			}
-			return nodeList[0];
-		}
-		else if (!this.node) {
-			// 表示する要素が存在しないときは代わりにプレースホルダとして空のTextを表示
-			return new GenStateTextNode(this.ctx, '');
+			return new GenStateNodeSet(ctx.normalizeCtxChild(nestedNodeSet[i].gen(val)));
 		}
 		return undefined;
 	}
 }
 
 /**
- * StateChooseNodeを生成するためのノード
+ * WhenStateNodeSetを生成するためのノードの集合
  * @template T
- * @extends { GenStateComponent<typeof Choose<T>> }
  */
-class GenStateChooseNode extends GenStateComponent {
+class GenWhenStateNodeSet extends GenStateNodeSet {
+	/** @type { Context } props.targetの扱っているコンテキスト */
+	#ctx;
+	/** @type { CompPropTypes<typeof Choose<T>> } プロパティ */
+	#props;
 
 	/**
-	 * 別物のStateNodeを生成しても問題のないGetStateNodeを生成
-	 * @returns { GenStateChooseNode<T> }
+	 * コンストラクタ
+	 * @param { Context } ctx 状態変数を扱っているコンテキスト
+	 * @param { CompPropTypes<typeof Choose<T>> } props 
+	 * @param { GenShowStateNodeSet[] } nestedNodeSet
 	 */
-	clone() {
-		return new GenStateChooseNode(this.ctx, this.component, this.props, this.children);
+	constructor(ctx, props, nestedNodeSet) {
+		super(nestedNodeSet);
+		this.#ctx = ctx;
+		this.#props = props;
 	}
 
 	/**
-	 * コンポーネントが属するコンテキストを生成し、それをもつコンポーネントを返す
-	 * @protected
-	 * @template { ComponentType<K> } K
-	 * @param { StateComponent<K> | undefined } stateComponent ノードを生成する場所
-	 * @returns { StateChooseNode<T> }
+	 * 保持しているノードの取得と構築
+	 * @returns { { set: WhenStateNodeSet<T>; sibling: GetGenStateNode[] } }
 	 */
-	buildContext(stateComponent) {
-		if (stateComponent) {
-			// 親コンポーネントが存在すればコンテキストを継承する
-			const ctx = stateComponent.ctx;
-			return new StateChooseNode(ctx, stateComponent);
-		}
-		else {
-			// StateComponentと同一の生成規則を適用
-			const ctx = new Context(stateComponent.ctx ? stateComponent.ctx : this.ctx, ctx => new StateChooseNode(ctx, stateComponent));
-			return ctx.component;
-		}
+	buildStateNodeSet() {
+		/** @type { GetGenStateNode[] } */
+		const sibling = [];
+		const set = new WhenStateNodeSet(sibling, this.#ctx, this.#props, this.nestedNodeSet);
+		return { set, sibling };
 	}
 }
 
 /**
- * ノードの選択を行うコンポーネント
+ * ノードの選択を行う擬似コンポーネント
  * @template T
  * @param { Context } ctx
  * @param { CompPropTypes<typeof Choose<T>> } props 
- * @param { GenStateWhenNode[] } children
+ * @param { GenShowStateNodeSet<T>[] } children
  * @returns 
  */
 function Choose(ctx, props, children) {
-	return new GenStateChooseNode(ctx, Choose, props, children);
+	return new GenWhenStateNodeSet(ctx, props, children)
 }
 /**
  * @template T
@@ -316,6 +307,7 @@ Choose.propTypes = {
 	/** @type { T } 表示対象を切り替える基準となる変数 */
 	target: undefined
 };
+/** @type { true } */
 Choose.early = true;
 
 export { Choose, When };

@@ -66,7 +66,7 @@ function Main(ctx, props) {
 		ctx.$('hr'),
 		ctx.$('div', [
 			ctx.t`Count×2 is: ${() => cnt.value * 2}`,
-			ctx.$(When, { test: () => cnt.value % 2 === 0 }, [
+			ctx.$(When, { target: cnt, test: cnt => cnt % 2 === 0 }, () => [
 				ctx.$('div', { style: { color: 'red' } }, [ctx.t`Cnt is even.`])
 			])
 		]),
