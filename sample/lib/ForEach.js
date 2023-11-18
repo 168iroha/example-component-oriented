@@ -17,13 +17,13 @@ class VariableStateNodeSet extends StateNodeSet {
 
 	/**
 	 * コンストラクタ
-	 * @param { GenStateNode[] } sibling 構築結果の兄弟要素を格納する配列
 	 * @param { Context } ctx 状態変数を扱っているコンテキスト
+	 * @param { { node: GetGenStateNode; ctx: Context }[] } sibling 構築結果の兄弟要素を格納する配列
 	 * @param { CompPropTypes<typeof ForEach<T>> } props 
 	 * @param { (v: T, key?: unknown, genkey?: (typeof ForEach['propTypes']['key'])) => (GenStateNode | GenStateNodeSet)[] } gen
 	 */
-	constructor(sibling, ctx, props, gen) {
-		super([], sibling);
+	constructor(ctx, sibling, props, gen) {
+		super(ctx, [], sibling);
 		// 表示対象の更新時にその捕捉を行う
 		const caller = watch(props.target, (prev, next) => {
 			// DOMノードが構築されている場合にのみ構築する(this.first.element自体はplaceholderにより(外部から操作しない限り)存在が保証される)
@@ -52,11 +52,11 @@ class VariableStateNodeSet extends StateNodeSet {
 							throw new Error(`Key ${key} is duplicated.`);
 						}
 						// 現在表示していない対象を表示する場合は構築する
-						const { set, sibling } = (new GenStateNodeSet(ctx.normalizeCtxChild(gen(e, key, props.key.value)))).buildStateNodeSet();
+						const { set, sibling } = (new GenStateNodeSet(ctx.normalizeCtxChild(gen(e, key, props.key.value)))).buildStateNodeSet(ctx);
 						keyList.set(key, set);
 						nodeSetList.push(set);
-						for (const s of sibling) {
-							s.build(ctx.component);
+						for (const { node, ctx } of sibling) {
+							node.build(ctx);
 						}
 					}
 				}
@@ -92,7 +92,7 @@ class VariableStateNodeSet extends StateNodeSet {
 		// 初期状態の構築
 		for (const e of props.target.value) {
 			const key = props.key.value(e);
-			const { set, sibling: sibling_ } = (new GenStateNodeSet(ctx.normalizeCtxChild(gen(e, key, props.key.value)))).buildStateNodeSet();
+			const { set, sibling: sibling_ } = (new GenStateNodeSet(ctx.normalizeCtxChild(gen(e, key, props.key.value)))).buildStateNodeSet(ctx);
 			this.#keyList.set(key, set);
 			this.nestedNodeSet.push(set);
 			sibling.push(...sibling_);
@@ -135,12 +135,13 @@ class GenVariableStateNodeSet extends GenStateNodeSet {
 
 	/**
 	 * 保持しているノードの取得と構築
-	 * @returns { { set: VariableStateNodeSet; sibling: GetGenStateNode[] } }
+	 * @param { Context } ctx コンテキスト
+	 * @returns { { set: VariableStateNodeSet; sibling: { node: GetGenStateNode; ctx: Context }[] } }
 	 */
-	buildStateNodeSet() {
-		/** @type { GetGenStateNode[] } */
+	buildStateNodeSet(ctx) {
+		/** @type { { node: GetGenStateNode; ctx: Context }[] } */
 		const sibling = [];
-		const set = new VariableStateNodeSet(sibling, this.#ctx, this.#props, this.#gen);
+		const set = new VariableStateNodeSet(this.#ctx, sibling, this.#props, this.#gen);
 		return { set, sibling };
 	}
 }

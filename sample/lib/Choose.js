@@ -15,13 +15,13 @@ class ShowStateNodeSet extends StateNodeSet {
 
 	/**
 	 * コンストラクタ
-	 * @param { GenStateNode[] } sibling 構築結果の兄弟要素を格納する配列
 	 * @param { Context } ctx 状態変数を扱っているコンテキスト
+	 * @param { { node: GetGenStateNode; ctx: Context }[] } sibling 構築結果の兄弟要素を格納する配列
 	 * @param { CompPropTypes<typeof When<T>> } props 
 	 * @param { (v: T) => (GenStateNode | GenStateNodeSet)[] } gen
 	 */
-	constructor(sibling, ctx, props, gen) {
-		super([], sibling);
+	constructor(ctx, sibling, props, gen) {
+		super(ctx, [], sibling);
 		// 表示対象の更新時にその捕捉を行う
 		const caller = watch(props.target, (prev, next) => {
 			// DOMノードが構築されたことがあるかつ状態変数が有効な場合にのみ構築する
@@ -36,8 +36,8 @@ class ShowStateNodeSet extends StateNodeSet {
 				/** @type { HTMLElement | Text | undefined } 挿入位置 */
 				const afterElement = this.first?.element;
 				this.nestedNodeSet = [set];
-				for (const s of sibling) {
-					s.build(ctx.component);
+				for (const { node, ctx } of sibling) {
+					node.build(ctx);
 				}
 				if (parent) {
 					ctx.component.label.update(() => {
@@ -60,7 +60,7 @@ class ShowStateNodeSet extends StateNodeSet {
 			const val = props.target.value;
 			const flag = val !== undefined && (props.test.value === undefined || props.test.value(val));
 			// 表示する要素が存在しないときは代わりにプレースホルダとして空のTextを表示
-			const { set, sibling: sibling_ } = (new GenStateNodeSet(ctx.normalizeCtxChild(flag ? gen(next) : [new GenStateTextNode(ctx, '')]))).buildStateNodeSet();
+			const { set, sibling: sibling_ } = (new GenStateNodeSet(ctx.normalizeCtxChild(flag ? gen(next) : [new GenStateTextNode(ctx, '')]))).buildStateNodeSet(ctx);
 			this.nestedNodeSet = [set];
 			sibling.push(...sibling_);
 		}
@@ -116,12 +116,13 @@ class GenShowStateNodeSet extends GenStateNodeSet {
 
 	/**
 	 * 保持しているノードの取得と構築
-	 * @returns { { set: ShowStateNodeSet<T>; sibling: GetGenStateNode[] } }
+	 * @param { Context } ctx コンテキスト
+	 * @returns { { set: ShowStateNodeSet<T>; sibling: { node: GetGenStateNode; ctx: Context }[] } }
 	 */
-	buildStateNodeSet() {
-		/** @type { GetGenStateNode[] } */
+	buildStateNodeSet(ctx) {
+		/** @type { { node: GetGenStateNode; ctx: Context }[] } */
 		const sibling = [];
-		const set = new ShowStateNodeSet(sibling, this.#ctx, this.#props, this.#gen);
+		const set = new ShowStateNodeSet(this.#ctx, sibling, this.#props, this.#gen);
 		return { set, sibling };
 	}
 }
@@ -163,13 +164,13 @@ class WhenStateNodeSet extends StateNodeSet {
 
 	/**
 	 * コンストラクタ
-	 * @param { GenStateNode[] } sibling 構築結果の兄弟要素を格納する配列
 	 * @param { Context } ctx 状態変数を扱っているコンテキスト
+	 * @param { { node: GetGenStateNode; ctx: Context }[] } sibling 構築結果の兄弟要素を格納する配列
 	 * @param { CompPropTypes<typeof Choose<T>> } props 
 	 * @param { GenShowStateNodeSet<T>[] } nestedNodeSet
 	 */
-	constructor(sibling, ctx, props, nestedNodeSet) {
-		super([], sibling);
+	constructor(ctx, sibling, props, nestedNodeSet) {
+		super(ctx, [], sibling);
 		this.#props = props;
 		// 表示対象の更新時にその捕捉を行う
 		const caller = watch(this.#props.target, (prev, next) => {
@@ -182,13 +183,13 @@ class WhenStateNodeSet extends StateNodeSet {
 
 				if (genStateNodeSet) {
 					// ノードを構築
-					const { set, sibling } = genStateNodeSet.buildStateNodeSet();
+					const { set, sibling } = genStateNodeSet.buildStateNodeSet(ctx);
 					const deleteNodeSet = this.nestedNodeSet;
 					/** @type { HTMLElement | Text | undefined } 挿入位置 */
 					const afterElement = this.first?.element;
 					this.nestedNodeSet = [set];
-					for (const s of sibling) {
-						s.build(ctx.component);
+					for (const { node, ctx } of sibling) {
+						node.build(ctx);
 					}
 					if (parent) {
 						ctx.component.label.update(() => {
@@ -209,7 +210,7 @@ class WhenStateNodeSet extends StateNodeSet {
 
 		/** @type { GenStateNodeSet } 初期表示の設定 */
 		const genStateNode = this.#chooseNode(ctx, props.target.value, nestedNodeSet);
-		const { set, sibling: sibling_ } = genStateNode.buildStateNodeSet();
+		const { set, sibling: sibling_ } = genStateNode.buildStateNodeSet(ctx);
 		this.nestedNodeSet = [set];
 		sibling.push(...sibling_);
 	}
@@ -279,12 +280,13 @@ class GenWhenStateNodeSet extends GenStateNodeSet {
 
 	/**
 	 * 保持しているノードの取得と構築
-	 * @returns { { set: WhenStateNodeSet<T>; sibling: GetGenStateNode[] } }
+	 * @param { Context } ctx コンテキスト
+	 * @returns { { set: WhenStateNodeSet<T>; sibling: { node: GetGenStateNode; ctx: Context }[] } }
 	 */
-	buildStateNodeSet() {
-		/** @type { GetGenStateNode[] } */
+	buildStateNodeSet(ctx) {
+		/** @type { { node: GetGenStateNode; ctx: Context }[] } */
 		const sibling = [];
-		const set = new WhenStateNodeSet(sibling, this.#ctx, this.#props, this.nestedNodeSet);
+		const set = new WhenStateNodeSet(this.#ctx, sibling, this.#props, this.nestedNodeSet);
 		return { set, sibling };
 	}
 }
