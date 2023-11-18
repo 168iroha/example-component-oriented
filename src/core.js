@@ -473,7 +473,7 @@ class Computed extends IState {
 class StateNode {
 	/** @type { Context } ノードを扱っているコンテキスト */
 	#ctx;
-	/** @type { { caller: CallerType; states: State<unknown>[] }[] } 呼び出し元のリスト(これの破棄により親との関連付けが破棄される) */
+	/** @protected @type { { caller: CallerType; states: State<unknown>[] }[] } 呼び出し元のリスト(これの破棄により親との関連付けが破棄される) */
 	callerList;
 
 	/**
@@ -1707,25 +1707,13 @@ class GenStateComponent extends GenStateNode {
 		}
 
 		/** 生成するコンポーネントが属するコンテキストとそのコンポーネント */
-		const node = this.buildContext(stateComponent);
+		const node = this.ctx.generateContextForComponent(stateComponent, ctx => new StateComponent(ctx, stateComponent)).component;
 
 		// コンポーネントを構築して返す
 		const result = node.build(this.component, this.props, this.children, this.observableStates);
 		this.#genFlag = true;
 
 		return { node, ...result };
-	}
-
-	/**
-	 * コンポーネントが属するコンテキストを生成し、それをもつコンポーネントを返す
-	 * @protected
-	 * @template { ComponentType<K2> } K2
-	 * @param { StateComponent<K2> | undefined } stateComponent ノードを生成する場所
-	 * @returns { StateComponent<K> }
-	 */
-	buildContext(stateComponent) {
-		const ctx = new Context(stateComponent ? stateComponent.ctx : this.ctx, ctx => new StateComponent(ctx, stateComponent));
-		return ctx.component;
 	}
 
 	/**
@@ -1857,22 +1845,31 @@ class Context {
 
 	/** @type { DomUpdateController } DOMの更新のためのコントローラ */
 	#domUpdateController;
-	/** @type { Set<CallerType>[] } 遅延評価対象の呼び出し元の集合についてのスタック */
+	/** @type { Map<StateComponent<unknown> | undefined, Set<CallerType>>[] } 遅延評価対象の呼び出し元の集合についてのスタック */
 	#lazyUpdateStack = [];
 
 	/**
 	 * コンストラクタ
-	 * @param { Context | undefined } ctx 生成元となるコンテキスト
-	 * @param { ((ctx: Context) => StateComponent<unknown>) | undefined } gen コンポーネントを示すノードを生成する関数
+	 * @param { DomUpdateController | undefined } domUpdateController DOMの更新のためのコントローラ
 	 */
-	constructor(ctx = undefined, gen = undefined) {
-		if (ctx && gen) {
-			this.#domUpdateController = ctx.#domUpdateController;
-			this.#component = gen(this);
-		}
-		else {
-			this.#domUpdateController = new DomUpdateController();
-		}
+	constructor(domUpdateController = undefined) {
+		this.#domUpdateController = domUpdateController ?? new DomUpdateController();
+	}
+
+	/**
+	 * コンポーネントが属するコンテキストを生成する
+	 * @template { ComponentType<K> } K
+	 * @param { StateComponent<K> | undefined } stateComponent ノードを生成する場所
+	 * @param { (ctx: Context) => StateComponent<unknown> } gen コンポーネントを示すノードを生成する関数
+	 * @returns { Context }
+	 */
+	generateContextForComponent(stateComponent, gen) {
+		const ctx = stateComponent ? stateComponent.ctx : this;
+		const retCtx = new Context(ctx.#domUpdateController);
+		retCtx.#stack = ctx.#stack;
+		retCtx.#component = gen(retCtx);
+		retCtx.#lazyUpdateStack = ctx.#lazyUpdateStack;
+		return retCtx;
 	}
 
 	get component() { return this.#component; }
@@ -1898,7 +1895,8 @@ class Context {
 	updateState(itr) {
 		// 状態の遅延評価を行う場合は遅延評価を行う対象の集合に記憶する
 		if (this.#lazyUpdateStack.length > 0) {
-			const set = this.#lazyUpdateStack[this.#lazyUpdateStack.length - 1];
+			const map = this.#lazyUpdateStack[this.#lazyUpdateStack.length - 1];
+			const set = map.has(this.#component) ? map.get(this.#component) : map.set(this.#component, new Set()).get(this.#component);
 			for (const val of itr) {
 				set.add(val);
 			}
@@ -1936,11 +1934,12 @@ class Context {
 	 * @returns { () => void } 状態変数の変更の伝播を行う関数
 	 */
 	lazy(callback) {
-		const set = new Set();
-		this.#lazyUpdateStack.push(set);
+		/** @type { Map<StateComponent<unknown> | undefined, Set<CallerType>> } */
+		const map = new Map();
+		this.#lazyUpdateStack.push(map);
 		callback();
 		this.#lazyUpdateStack.pop();
-		return set.size === 0 ? () => {} : () => this.updateState(set);
+		return map.size === 0 ? () => {} : () => map.forEach((set, component) => (component?.ctx ?? this).updateState(set));
 	}
 
 	/**
@@ -2192,7 +2191,7 @@ class Context {
 	}
 
 	/**
-	 * コンポーネントを示す関数を実行する
+	 * 自コンテキストで動作するコンポーネントを示す関数を実行する
 	 * @template { ComponentType<K> } K
 	 * @param { K } component コンポーネントを示す関数
 	 * @param { CompPropTypes<K> } props プロパティ
