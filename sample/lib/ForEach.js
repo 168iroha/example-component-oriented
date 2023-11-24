@@ -1,4 +1,5 @@
-import { State, StateNodeSet, GenStateNode, GenStateNodeSet, GenStateTextNode, GetGenStateNode, Context, watch } from "../../src/core.js";
+import { State, StateNode, StateNodeSet, GenStateNode, GenStateNodeSet, GenStatePlaceholderNode, Context, watch } from "../../src/core.js";
+import { SwitchingPage, SuspendGroup } from "../../src/async.js";
 
 /**
  * @template T
@@ -10,7 +11,9 @@ import { State, StateNodeSet, GenStateNode, GenStateNodeSet, GenStateTextNode, G
  * @template T
  */
 class VariableStateNodeSet extends StateNodeSet {
-	/** @type { Map<unknown, StateNodeSet> } 現在のノードの集合のキーのリスト */
+	/** @type { CompPropTypes<typeof ForEach<T>> } プロパティ */
+	#props;
+	/** @type { Map<unknown, { set: StateNodeSet, switching: SwitchingPage; index: number }> } 現在のノードの集合のキーのリスト */
 	#keyList = new Map();
 	/** @type { { caller: CallerType; states: State<unknown>[] }[] } 呼び出し元のリスト(これの破棄により親との関連付けが破棄される) */
 	callerList = [];
@@ -18,19 +21,20 @@ class VariableStateNodeSet extends StateNodeSet {
 	/**
 	 * コンストラクタ
 	 * @param { Context } ctx 状態変数を扱っているコンテキスト
-	 * @param { { node: GetGenStateNode; ctx: Context }[] } sibling 構築結果の兄弟要素を格納する配列
+	 * @param { { node: GenStateNode; ctx: Context }[] } sibling 構築結果の兄弟要素を格納する配列
 	 * @param { CompPropTypes<typeof ForEach<T>> } props 
 	 * @param { (v: T, key?: unknown, genkey?: (typeof ForEach['propTypes']['key'])) => (GenStateNode | GenStateNodeSet)[] } gen
 	 */
 	constructor(ctx, sibling, props, gen) {
 		super(ctx, [], sibling);
+		this.#props = props;
+
 		// 表示対象の更新時にその捕捉を行う
 		const caller = watch(props.target, (prev, next) => {
 			// DOMノードが構築されている場合にのみ構築する(this.first.element自体はplaceholderにより(外部から操作しない限り)存在が保証される)
 			const element = this.first?.element;
-			if (element && !(prev.length === 0 && prev.length === next.length)) {
-				const parent = element?.parentElement;
-				/** @type { Map<Object, StateNodeSet> } 変更後のノードの集合のキーのリスト */
+			if (element && !(prev.length === 0 && next.length === 0)) {
+				/** @type { Map<unknown, { set: StateNodeSet, switching: SwitchingPage; index: number }> } 変更後のノードの集合のキーのリスト */
 				const keyList = new Map();
 
 				/** @type { StateNodeSet[] } 挿入をするノードの全体 */
@@ -41,9 +45,9 @@ class VariableStateNodeSet extends StateNodeSet {
 					const key = props.key.value(e);
 					if (this.#keyList.has(key)) {
 						// 現在表示している対象の表示の場合はノードを移動させる
-						const set = this.#keyList.get(key);
-						keyList.set(key, set);
-						nodeSetList.push(set);
+						const val = this.#keyList.get(key);
+						keyList.set(key, { set: val.set, switching: val.switching, index: i });
+						nodeSetList.push(val.set);
 						this.#keyList.delete(key);
 					}
 					else {
@@ -53,35 +57,67 @@ class VariableStateNodeSet extends StateNodeSet {
 						}
 						// 現在表示していない対象を表示する場合は構築する
 						const { set, sibling } = (new GenStateNodeSet(ctx.normalizeCtxChild(gen(e, key, props.key.value)))).buildStateNodeSet(ctx);
-						keyList.set(key, set);
+						const suspendGroup = new SuspendGroup();
+						const switchingPage = new SwitchingPage(suspendGroup);
+						// 各種イベントのインスタンスの単方向関連付け
+						ctx.call(() => {
+							switchingPage.afterSwitching = props.onAfterSwitching.value;
+						});
+						ctx.call(() => {
+							switchingPage.beforeSwitching = props.onBeforeSwitching.value;
+						});
+						keyList.set(key, { set, switching: switchingPage, index: i });
 						nodeSetList.push(set);
 						for (const { node, ctx } of sibling) {
 							node.build(ctx);
 						}
 					}
 				}
-				// 要素が存在しないときはプレースホルダを設置
+				// 表示する要素が存在しないときは代わりにplaceholderを設置
 				if (nodeSetList.length === 0) {
-					nodeSetList.push(new GenStateNodeSet([new GenStateTextNode(ctx, '')]));
+					const { set, sibling } = (new GenStateNodeSet([new GenStatePlaceholderNode(ctx)])).buildStateNodeSet(ctx);
+					for (const { node, ctx } of sibling) {
+						node.build(ctx);
+					}
+					nodeSetList.push(set);
 				}
 				const deleteNodeSet = [...this.#keyList.values()];
 				this.#keyList = keyList;
-				/** @type { HTMLElement | Text | undefined } 挿入位置 */
-				let afterElement = this.first?.element;
+				const prevNodeSetList = this.nestedNodeSet;
+				const endNode = this.last.element.nextSibling;
 				this.nestedNodeSet = nodeSetList;
 
-				if (parent) {
-					// DOMノードの更新
-					ctx.component.label.update(() => {
-						// ノードの挿入
-						for (const set of nodeSetList) {
-							afterElement = set.insertBefore(afterElement, parent);
+				// 親が有効ならばノードの付け替えを実施する
+				if (element.parentElement) {
+					if (props.move.value && this.first.element.nodeType === Node.ELEMENT_NODE && element.nodeType === Node.ELEMENT_NODE) {
+						// FLIPによるアニメーションの実施
+						/** @type { HTMLElement[] } */
+						const elementList = [];
+						for (const nodeSet of prevNodeSetList) {
+							for (const node of nodeSet.nodeSet()) {
+								elementList.push(node.element);
+							}
 						}
-						// ノードの削除
-						for (const set of deleteNodeSet) {
-							set.remove();
-						}
-					});
+						// First
+						const firstStateList = elementList.map(e => e.getBoundingClientRect());
+						this.#setupNodeList(element, endNode, deleteNodeSet);
+						// Last
+						const lastStateList = elementList.map(e => e.getBoundingClientRect());
+						// Invert&Play
+						elementList.forEach((e, idx) => {
+							const moveX = firstStateList[idx].left - lastStateList[idx].left;
+							const moveY = firstStateList[idx].top - lastStateList[idx].top;
+							if (moveX !== 0 || moveY !== 0) {
+								e.animate([
+									{ transform: `translate(${moveX}px, ${moveY}px)` },
+									{ transform: 'translate(0, 0)' }
+								], props.move.value);
+							}
+						});
+					}
+					else {
+						this.#setupNodeList(element, endNode, deleteNodeSet);
+					}
 				}
 			}
 		});
@@ -93,9 +129,71 @@ class VariableStateNodeSet extends StateNodeSet {
 		for (const e of props.target.value) {
 			const key = props.key.value(e);
 			const { set, sibling: sibling_ } = (new GenStateNodeSet(ctx.normalizeCtxChild(gen(e, key, props.key.value)))).buildStateNodeSet(ctx);
-			this.#keyList.set(key, set);
+			const suspendGroup = new SuspendGroup();
+			const switchingPage = new SwitchingPage(suspendGroup);
+			// 各種イベントのインスタンスの単方向関連付け
+			ctx.call(() => {
+				switchingPage.afterSwitching = props.onAfterSwitching.value;
+			});
+			ctx.call(() => {
+				switchingPage.beforeSwitching = props.onBeforeSwitching.value;
+			});
+			// ノードの設定
+			this.#keyList.set(key, { set, switching: switchingPage, index: this.#keyList.size });
 			this.nestedNodeSet.push(set);
 			sibling.push(...sibling_);
+		}
+
+		ctx.onMount(() =>{
+			// ノードの切り替え
+			const cancellable = props.cancellable.value ?? true;
+			for (const { set, switching } of this.#keyList.values()) {
+				const parent = set.first.element.parentElement;
+				const afterElement = set.last.element.nextElementSibling;
+				switching.insertBefore(set, afterElement, parent, cancellable);
+			}
+		});
+	}
+
+	/**
+	 * ノードリストのセットアップを行う
+	 * @param { HTMLElement | Text } afterElement 前回のノードリストにおける一番最初のノード(parentは存在する前提とする)
+	 * @param { Node | undefined } endNode 前回のノードリストにおける一番最後のノードの次のノード
+	 * @param { { set: StateNodeSet, switching: SwitchingPage; index: number }[] } deleteNodeSet 削除対象のノード
+	 */
+	#setupNodeList(afterElement, endNode, deleteNodeSet) {
+		const parent = afterElement.parentElement;
+		/** @type { StateNodeSet[] } */
+		const nodeSetList = [];
+		const cancellable = this.#props.cancellable.value ?? true;
+		// 残存するノードの並べ替え
+		for (const { set, switching } of this.#keyList.values()) {
+			if (switching.node) {
+				afterElement = set.insertBefore(afterElement, parent);
+				nodeSetList.push(set);
+			}
+		}
+		// ノードの新規挿入
+		for (const { set, switching, index } of this.#keyList.values()) {
+			if (!switching.node) {
+				/** @type { HTMLElement | Text | undefined } */
+				const _afterElement = index >= nodeSetList.length ? afterElement : nodeSetList[index].first.element;
+				switching.insertBefore(set, _afterElement, parent, cancellable);
+				nodeSetList.push(set);
+			}
+		}
+		// 削除対象のノードの並べ替え
+		for (const { set, index } of deleteNodeSet) {
+			const afterElement = index >= nodeSetList.length ? endNode : nodeSetList[index].first.element;
+			set.insertBefore(afterElement, parent);
+		}
+		// ノードの削除
+		for (const { switching } of deleteNodeSet) {
+			switching.remove(cancellable);
+		}
+		// 要素が存在しないときはplaceholderを設置
+		if (nodeSetList.length === 0) {
+			this.nestedNodeSet[0].insertBefore(endNode, parent);
 		}
 	}
 
@@ -136,10 +234,10 @@ class GenVariableStateNodeSet extends GenStateNodeSet {
 	/**
 	 * 保持しているノードの取得と構築
 	 * @param { Context } ctx コンテキスト
-	 * @returns { { set: VariableStateNodeSet; sibling: { node: GetGenStateNode; ctx: Context }[] } }
+	 * @returns { { set: VariableStateNodeSet; sibling: { node: GenStateNode; ctx: Context }[] } }
 	 */
 	buildStateNodeSet(ctx) {
-		/** @type { { node: GetGenStateNode; ctx: Context }[] } */
+		/** @type { { node: GenStateNode; ctx: Context }[] } */
 		const sibling = [];
 		const set = new VariableStateNodeSet(this.#ctx, sibling, this.#props, this.#gen);
 		return { set, sibling };
@@ -165,6 +263,14 @@ ForEach.propTypes = {
 	target: [],
 	/** @type { (val: T) => unknown } 表示対象を切り替える基準となる変数 */
 	key: undefined,
+	/** @type { ((node: StateNode) => Promise | undefined) | undefined } ノード削除前に実行されるイベント */
+	onBeforeSwitching: undefined,
+	/** @type { ((node: StateNode) => Promise | undefined) | undefined } ノード挿入後に実行されるイベント */
+	onAfterSwitching: undefined,
+	/** @type { KeyframeAnimationOptions | undefined } リスト要素が移動するときのオプションの定義 */
+	move: undefined,
+	/** @type { boolean } ノードの切り替え処理がキャンセル可能かの設定 */
+	cancellable: true
 };
 /** @type { true } */
 ForEach.early = true;

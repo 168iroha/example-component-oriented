@@ -1,4 +1,3 @@
-
 /**
  * @typedef {{
  * 		label?: ICallerLabel | undefined;
@@ -571,7 +570,7 @@ class GenStateNode {
 			let _node = undefined;
 			/** @type { GenStateNode | undefined } */
 			let _gen = undefined;
-			/** @type { { node: GetGenStateNode; ctx: Context }[] } */
+			/** @type { { node: GenStateNode; ctx: Context }[] } */
 			let _children = [];
 
 			// コンポーネントの評価(ルートノードによってはコンポーネントではない場合もある)
@@ -664,11 +663,11 @@ class GenStateNode {
 							children[i] = _gen;
 						}
 						else {
-							if (_gen instanceof GenStateTextNode) {
+							if (_gen instanceof GenStateTextNode || _gen instanceof GenStatePlaceholderNode) {
 								const { node } = _gen.buildCurrent(ctx);
 								// 子要素をStateNodeで置き換え
 								children[i] = { node, children: [], element: node.element };
-								// テキストノードであれば挿入して補完する
+								// テキストノードもしくはplaceholderであれば挿入して補完する
 								if (useChildNodes) {
 									element.insertBefore(node.element, childNode);
 									++cnt;
@@ -833,7 +832,7 @@ class StateNodeSet {
 	 * コンストラクタ
 	 * @param { Context } ctx コンテキスト
 	 * @param { (GenStateNode | GenStateNodeSet)[] } nestedNodeSet ネストを許容したノードの集合
-	 * @param { { node: GetGenStateNode; ctx: Context }[] } sibling 構築結果の兄弟要素を格納する配列
+	 * @param { { node: GenStateNode; ctx: Context }[] } sibling 構築結果の兄弟要素を格納する配列
 	 */
 	constructor(ctx, nestedNodeSet, sibling) {
 		for (const nestedNode of nestedNodeSet) {
@@ -948,10 +947,10 @@ class GenStateNodeSet {
 	/**
 	 * 保持しているノードの取得と構築
 	 * @param { Context } ctx コンテキスト
-	 * @returns { { set: StateNodeSet; sibling: { node: GetGenStateNode; ctx: Context }[] } }
+	 * @returns { { set: StateNodeSet; sibling: { node: GenStateNode; ctx: Context }[] } }
 	 */
 	buildStateNodeSet(ctx) {
-		/** @type { { node: GetGenStateNode; ctx: Context }[] } */
+		/** @type { { node: GenStateNode; ctx: Context }[] } */
 		const sibling = [];
 		const set = new StateNodeSet(ctx, this.nestedNodeSet, sibling);
 		return { set, sibling };
@@ -1034,12 +1033,81 @@ class GenStateTextNode extends GenStateNode {
 		const callerList = [];
 
 		// 子にテキストの状態が渡された場合は変更を監視する
-		const caller = this.ctx.setParam(text, val => {
+		const caller = ctx.setParam(text, val => {
 			element.data = val;
 		}, ctx.component.label);
 		if (caller && caller.states.length > 0) callerList.push(caller);
 
-		return { node: new StateTextNode(this.ctx, element, callerList), children: [] };
+		return { node: new StateTextNode(ctx, element, callerList), children: [] };
+	}
+}
+
+/**
+ * placeholderを示すノード
+ */
+class StatePlaceholderNode extends StateNode {
+	/** @type { Text } DOMノード */
+	#element;
+
+	/**
+	 * コンストラクタ
+	 * @param { Context } ctx ノードを扱っているコンテキスト
+	 * @param { Text } element DOMノード
+	 */
+	constructor(ctx, element) {
+		super(ctx, []);
+		this.#element = element;
+	}
+
+	/**
+	 * DOMノードの取得
+	 * @returns { Text }
+	 */
+	get element() { return this.#element; }
+
+	/**
+	 * ノードの削除
+	 */
+	remove() {
+		super.remove();
+		this.#element.remove();
+	}
+}
+
+/**
+ * StatePlaceholderNodeを生成するためのノード
+ */
+class GenStatePlaceholderNode extends GenStateNode {
+	/**
+	 * コンストラクタ
+	 * @param { Context } ctx StateNodeを生成するコンテキスト
+	 */
+	constructor(ctx) {
+		super(ctx);
+	}
+
+	/**
+	 * atomicなGetStateNodeであるかの判定
+	 */
+	get isAtomic() { return true; }
+
+	/**
+	 * 別物のStateNodeを生成しても問題のないGetStateNodeを生成
+	 * @returns { GenStatePlaceholderNode }
+	 */
+	clone() {
+		return new GenStatePlaceholderNode(this.ctx);
+	}
+
+	/**
+	 * 自要素を構築する
+	 * @param { Context } ctx ノードを生成する場所
+	 * @param { HTMLElement | Text | undefined } target マウント対象のDOMノード
+	 * @returns { { node: StateNode; gen?: GenStateNode; children: { node: GenStateNode; ctx: Context }[] } }
+	 */
+	buildCurrent(ctx, target) {
+		const element = document.createTextNode('');
+		return { node: new StatePlaceholderNode(ctx, element), children: [] };
 	}
 }
 
@@ -1138,7 +1206,7 @@ class GenStateHTMLElement extends GenStateNode {
 			}
 		}
 
-		return { node: new StateHTMLElement(this.ctx, element, []), children: [] };
+		return { node: new StateHTMLElement(ctx, element, []), children: [] };
 	}
 }
 
@@ -2352,12 +2420,14 @@ export {
 	IState,
 	State,
 	StateNode,
+	StatePlaceholderNode,
 	StateNodeSet,
 	StateComponent,
 	GenStateNode,
 	GetGenStateNode,
 	GenStateNodeSet,
 	GenStateTextNode,
+	GenStatePlaceholderNode,
 	GenStateComponent,
 	Context,
 	watch
