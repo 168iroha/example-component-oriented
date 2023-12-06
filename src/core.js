@@ -1,4 +1,3 @@
-
 /**
  * @typedef {{
  * 		label?: ICallerLabel | undefined;
@@ -8,6 +7,7 @@
 
 /**
  * CallerTypeに対するラベルのインターフェース
+ * @interface
  */
 class ICallerLabel {
 	/**
@@ -390,6 +390,11 @@ class Computed extends IState {
  */
 
 /**
+ * @template { ComponentType<K> } K
+ * @typedef { (...args: Parameters<K>) => Promise<ReturnType<K>> } AsyncComponentType 非同期コンポーネントの型
+ */
+
+/**
  * @template { (a?: unknown, b?: unknown, c?: unknown[]) => unknown } T
  * @typedef { Parameters<T>[2] extends undefined ? [] : Parameters<T>[2] } CompChildrenType コンポーネントの子要素の型
  */
@@ -473,7 +478,7 @@ class Computed extends IState {
 class StateNode {
 	/** @type { Context } ノードを扱っているコンテキスト */
 	#ctx;
-	/** @type { { caller: CallerType; states: State<unknown>[] }[] } 呼び出し元のリスト(これの破棄により親との関連付けが破棄される) */
+	/** @protected @type { { caller: CallerType; states: State<unknown>[] }[] } 呼び出し元のリスト(これの破棄により親との関連付けが破棄される) */
 	callerList;
 
 	/**
@@ -499,6 +504,15 @@ class StateNode {
 	 */
 	remove() {
 		this.callerList.forEach(caller => caller.states.forEach(s => s.delete(caller.caller)));
+		this.element?.remove();
+	}
+
+	/**
+	 * ノードの取り外し
+	 */
+	detach() {
+		this.callerList.forEach(caller => caller.states.forEach(s => s.delete(caller.caller)));
+		this.element?.remove();
 	}
 }
 
@@ -508,6 +522,8 @@ class StateNode {
 class GenStateNode {
 	/** @type { Context } StateNodeを生成するコンテキスト */
 	#ctx;
+	/** @protected @type { ((node: StateNode) => unknown)[] } buildCurrent時に同期的に生成したStateNodeを配信するためのコールバックのリスト */
+	#deliverStateNodeCallback = [];
 
 	/**
 	 * コンストラクタ
@@ -528,6 +544,15 @@ class GenStateNode {
 	get isAtomic() { return false; }
 
 	/**
+	 * buildCurrent時にStateNodeを取得するためのコールバックの指定
+	 * @param { (node: StateNode) => unknown } callback StateNodeを取得するためのコールバック
+	 */
+	getStateNode(callback) {
+		this.#deliverStateNodeCallback.push(callback);
+		return this;
+	}
+
+	/**
 	 * 別物のStateNodeを生成しても問題のないGetStateNodeを生成
 	 * @returns { GenStateNode }
 	 */
@@ -535,37 +560,48 @@ class GenStateNode {
 
 	/**
 	 * 自要素を構築する
-	 * @template { ComponentType<K> } K
-	 * @param { StateComponent<K> | undefined } stateComponent ノードを生成する場所
+	 * @protected
+	 * @param { Context } ctx ノードを生成する場所
 	 * @param { HTMLElement | Text | undefined } target マウント対象のDOMノード
-	 * @returns { { node: StateNode; gen?: GenStateNode; children: GenStateNode[] } }
+	 * @returns { { node: StateNode; gen?: GenStateNode; children: { node: GenStateNode; ctx: Context }[] } }
 	 */
-	buildCurrent(stateComponent, target) { throw new Error('not implemented.'); }
+	buildCurrentImpl(ctx, target) { throw new Error('not implemented.'); }
+
+	/**
+	 * 自要素を構築する
+	 * @param { Context } ctx ノードを生成する場所
+	 * @param { HTMLElement | Text | undefined } target マウント対象のDOMノード
+	 * @returns { { node: StateNode; gen?: GenStateNode; children: { node: GenStateNode; ctx: Context }[] } }
+	 */
+	buildCurrent(ctx, target) {
+		const ret = this.buildCurrentImpl(ctx, target);
+		this.#deliverStateNodeCallback.forEach(callback => callback(ret.node));
+		this.#deliverStateNodeCallback = [];
+		return ret;
+	}
 
 	/**
 	 * 子孫要素を構築する
-	 * @template { ComponentType<K> } K
-	 * @param { StateComponent<K> | undefined } stateComponent ノードを生成する場所
+	 * @param { Context | undefined } ctx ノードを生成する場所
 	 */
-	build(stateComponent) {
-		const { calc, node } = this.#mountImpl(stateComponent);
+	build(ctx) {
+		const { calc, node } = this.#mountImpl(ctx ?? this.ctx);
 		calc();
 		return node;
 	}
 
 	/**
 	 * DOMノードにマウントする
-	 * @template { ComponentType<K> } K
-	 * @param { StateComponent<K> | undefined } stateComponent ノードを生成する場所
+	 * @param { Context } ctx ノードを生成する場所
 	 * @param { HTMLElement | undefined } target マウント対象のDOMノード
 	 * @returns { { calc: () => void; node: StateNode } }
 	 */
-	#mountImpl(stateComponent, target) {
+	#mountImpl(ctx, target) {
 		/** @type { undefined | StateNode } */
 		let resuleNode = undefined;
 
 		// コンポーネントの下でノードが構築されるかの判定
-		if (!(stateComponent || (this instanceof GenStateComponent))) {
+		if (!(ctx.component || (this instanceof GenStateComponent))) {
 			throw new Error('It must be built under the Component.');
 		}
 
@@ -574,58 +610,61 @@ class GenStateNode {
 			let _node = undefined;
 			/** @type { GenStateNode | undefined } */
 			let _gen = undefined;
-			/** @type { GenStateNode[] } */
+			/** @type { { node: GenStateNode; ctx: Context }[] } */
 			let _children = [];
 
 			// コンポーネントの評価(ルートノードによってはコンポーネントではない場合もある)
 			try {
-				({ node: _node, gen: _gen, children: _children } = this.buildCurrent(stateComponent, target));
+				({ node: _node, gen: _gen, children: _children } = this.buildCurrent(ctx, target));
 			}
 			catch (e) {
-				if (!stateComponent) {
-					// stateComponent配下の構築を破棄するためstateComponentで捕捉不可ならリスロー
+				if (!ctx?.component) {
+					// ctx.component配下の構築を破棄するためctx.componentで捕捉不可ならリスロー
 					throw e;
 				}
-				stateComponent.onErrorCaptured(e, stateComponent);
+				ctx.component.onErrorCaptured(e, ctx.component);
 				return;
 			}
 			resuleNode = _node;
-			let component = _node instanceof StateComponent ? _node : stateComponent;
+			ctx = _node instanceof StateComponent ? _node.ctx : ctx;
 
 			/** @type { StateComponent<unknown>[] } コンポーネントについてのonMountを発火するためのスタック */
-			const stackComponent = _node instanceof StateComponent ? [_node] : [];
+			const stackComponent = (_node instanceof StateComponent) && !(_node instanceof StateAsyncComponent) ? [_node] : [];
 
 			try {
 				// atomicなノードが出現するまで繰り返し構築する
 				// コンポーネントの子がコンポーネントの場合などに繰り返される
 				// _genがundefinedならatomic
 				while (_gen) {
-					const { node, gen, children } = _gen.buildCurrent(component, target);
+					const { node, gen, children } = _gen.buildCurrent(ctx, target);
 					_node = node;
 					_gen = gen;
 					// 既に子要素が設定されている場合は無視する
 					_children = _children.length > 0 ? _children : children;
 					if (_node instanceof StateComponent) {
-						component = _node;
-						stackComponent.push(_node);
+						ctx = _node.ctx;
+						if (!(_node instanceof StateAsyncComponent)) {
+							// 非同期コンポーネントでない場合にonMountの発火を試みる
+							stackComponent.push(_node);
+						}
 					}
 				}
 			}
 			catch (e) {
-				if (component !== _node) {
+				if (ctx.component !== _node) {
 					_node.remove();
 				}
-				component.onErrorCaptured(e, component);
+				ctx.component.onErrorCaptured(e, ctx.component);
 				return;
 			}
 
-			/** @type { { component: StateComponent<unknown>, node: StateNode; children: GenStateNode[]; element: HTMLElement | Text | undefined }[] } コンポーネントについての幅優先探索に関するキュー */
-			const queueComponent = [{ component, node: _node, children: _children, element: target }];
+			/** @type { { ctx: Context, node: StateNode; children: { node: GenStateNode; ctx: Context }[]; element: HTMLElement | Text | undefined }[] } コンポーネントについての幅優先探索に関するキュー */
+			const queueComponent = [{ ctx, node: _node, children: _children, element: target }];
 			
 			while (queueComponent.length > 0) {
 				/** @type { (typeof queueComponent)[number] } */
-				const { component, node, children, element: localRoot } = queueComponent.shift();
-				/** @type {{ node: StateNode; children: (typeof localTree | GenStateNode)[]; element: HTMLElement | Text | undefined }} コンポーネント内におけるStateNodeのツリー(コンポーネントはGenStateNodeで管理し、それ以外は最終的にatomicになる) */
+				const { ctx, node, children, element: localRoot } = queueComponent.shift();
+				/** @type {{ node: StateNode; children: (typeof localTree | { node: GenStateNode; ctx: Context })[]; element: HTMLElement | Text | undefined }} コンポーネント内におけるStateNodeのツリー(コンポーネントはGenStateNodeで管理し、それ以外は最終的にatomicになる) */
 				const localTree = { node, children, element: localRoot };
 				/** @type { (typeof localTree)[] } ノードについての幅優先探索に関するキュー */
 				const queueNode = [localTree];
@@ -648,30 +687,30 @@ class GenStateNode {
 					let cnt = 0;
 					// 子要素の評価
 					for (let i = 0; i < children.length; ++i) {
-						/** @type { GenStateNode } */
-						const child = children[i];
+						/** @type { { node: GenStateNode; ctx: Context } } */
+						const { node: child, ctx: childCtx } = children[i];
 
 						[_node, _gen, _children] = [undefined, child, []];
 						// 原子的なノードでなければノードを構築する
 						if (!child.isAtomic && !(child instanceof GenStateComponent)) {
-							({ node: _node, gen: _gen, children: _children } = child.buildCurrent(component, target));
+							({ node: _node, gen: _gen, children: _children } = child.buildCurrent(childCtx, target));
 						}
 						const childNode = cnt < childNodes.length ? childNodes[cnt++] : undefined;
 						// ノードの比較を実施(_genはundefinedにはならない)
 						if (!_gen.isAtomic) {
 							// _genがatomicならコンポーネント
-							if (useChildNodes && !childNode) {
+							if (useChildNodes && !childNode && !(_gen instanceof GenStateAsyncComponent)) {
 								throw new Error('The number of nodes is insufficient.');
 							}
 							// 子要素をコンポーネントを生成するノードで置き換え
 							children[i] = _gen;
 						}
 						else {
-							if (_gen instanceof GenStateTextNode) {
-								const { node } = _gen.buildCurrent(component);
+							if (_gen instanceof GenStateTextNode || _gen instanceof GenStatePlaceholderNode) {
+								const { node } = _gen.buildCurrent(childCtx);
 								// 子要素をStateNodeで置き換え
 								children[i] = { node, children: [], element: node.element };
-								// テキストノードであれば挿入して補完する
+								// テキストノードもしくはplaceholderであれば挿入して補完する
 								if (useChildNodes) {
 									element.insertBefore(node.element, childNode);
 									++cnt;
@@ -681,7 +720,7 @@ class GenStateNode {
 								if (useChildNodes && !childNode) {
 									throw new Error('The number of nodes is insufficient.');
 								}
-								const { node, children: grandchildren } = _gen.buildCurrent(component, childNode);
+								const { node, children: grandchildren } = _gen.buildCurrent(childCtx, childNode);
 								// 既に子要素が設定されている場合は無視する
 								_children = _children.length > 0 ? _children : grandchildren;
 								// localTreeの構築
@@ -708,30 +747,33 @@ class GenStateNode {
 						if (child instanceof GenStateComponent) {
 							_gen = child;
 							_children = [];
-							let _component = component;
+							let _ctx = ctx;
 							try {
 								// atomicなノードが出現するまで繰り返し構築する
 								// コンポーネントの子がコンポーネントの場合などに繰り返される
 								// _genがundefinedならatomic
 								do {
-									const { node, gen, children } = _gen.buildCurrent(_component, childNode);
+									const { node, gen, children } = _gen.buildCurrent(_ctx, childNode);
 									_node = node;
 									_gen = gen;
 									// 既に子要素が設定されている場合は無視する
 									_children = _children.length > 0 ? _children : children;
 									if (_node instanceof StateComponent) {
-										_component = _node;
-										stackComponent.push(_node);
+										_ctx = _node.ctx;
+										if (!(_node instanceof StateAsyncComponent)) {
+											// 非同期コンポーネントでない場合にonMountの発火を試みる
+											stackComponent.push(_node);
+										}
 									}
 								} while (_gen);
 								// 構築対象のコンポーネントのpush
-								queueComponent.push({ component: _component, node: _node, children: _children, element: childNode });
+								queueComponent.push({ ctx: _ctx, node: _node, children: _children, element: childNode });
 							}
 							catch (e) {
-								if (_component !== _node) {
+								if (_ctx.component !== _node) {
 									_node.remove();
 								}
-								_component.onErrorCaptured(e, _component);
+								_ctx.component.onErrorCaptured(e, _ctx.component);
 								// エラーが起きた箇所以外のコンポーネントは構築するようにする
 							}
 						}
@@ -742,7 +784,7 @@ class GenStateNode {
 						if (!childNode) {
 							node.element.appendChild(_node.element);
 						}
-						// GenStateComponent出ない場合は次の探索のセットアップ
+						// GenStateComponentでない場合は次の探索のセットアップ
 						if (!(child instanceof GenStateNode)) {
 							queueNode.push(child);
 						}
@@ -765,7 +807,7 @@ class GenStateNode {
 	 * @param { HTMLElement } target マウント対象のDOMノード
 	 */
 	mount(target) {
-		this.#mountImpl(undefined, target).calc();
+		this.#mountImpl(this.ctx, target).calc();
 	}
 
 	/**
@@ -775,54 +817,7 @@ class GenStateNode {
 	 */
 	write(target) {
 		// 変更の伝播を破棄する
-		return this.#mountImpl(undefined, target).node.element;
-	}
-}
-
-/**
- * GenStateNodeで生成したStateNodeを取得するためのノード
- * GenStateNodeとStateNodeを一意に対応付けるために利用するものであり、build時に使い捨てるオブジェクトを生成する
- * (通常はGenStateNode:StateNode = 1:N)
- */
-class GetGenStateNode extends GenStateNode {
-	/** @type { GenStateNode } 管理するGenStateNode */
-	#gen;
-	/** @type { (node: StateNode) => unknown } 取得したノードを伝播する関数 */
-	#setter;
-
-	/**
-	 * コンストラクタ
-	 * @param { GenStateNode } gen 管理するGenStateNode
-	 * @param { (node: StateNode) => unknown } setter 取得したノードを伝播する関数
-	 */
-	constructor(gen, setter) {
-		super(gen.ctx);
-		this.#gen = gen;
-		this.#setter = setter;
-	}
-
-	/**
-	 * atomicなGetStateNodeであるかの判定
-	 */
-	get isAtomic() { return this.#gen.isAtomic; }
-
-	/**
-	 * 別物のStateNodeを生成しても問題のないGetStateNodeを生成(呼びだされてはならない)
-	 * @returns { GenStateNode }
-	 */
-	clone() { throw new Error('This call is invalid.'); }
-
-	/**
-	 * 自要素を構築する
-	 * @template { ComponentType<K> } K
-	 * @param { StateComponent<K> } stateComponent ノードを生成する場所
-	 * @param { HTMLElement | Text | undefined } target マウント対象のDOMノード
-	 * @returns { { node: StateNode; gen?: GenStateNode; children: GenStateNode[] } }
-	 */
-	buildCurrent(stateComponent, target) {
-		const ret = this.#gen.buildCurrent(stateComponent, target);
-		this.#setter(ret.node);
-		return ret;
+		return this.#mountImpl(this.ctx, target).node.element;
 	}
 }
 
@@ -835,16 +830,18 @@ class StateNodeSet {
 
 	/**
 	 * コンストラクタ
+	 * @param { Context } ctx コンテキスト
 	 * @param { (GenStateNode | GenStateNodeSet)[] } nestedNodeSet ネストを許容したノードの集合
-	 * @param { GenStateNode[] } sibling 構築結果の兄弟要素を格納する配列
+	 * @param { { node: GenStateNode; ctx: Context }[] } sibling 構築結果の兄弟要素を格納する配列
 	 */
-	constructor(nestedNodeSet, sibling) {
+	constructor(ctx, nestedNodeSet, sibling) {
 		for (const nestedNode of nestedNodeSet) {
 			if (nestedNode instanceof GenStateNode) {
 				// GenStateNodeの場合は後からノードをセットされるようにする
 				this.nestedNodeSet.push(undefined);
 				const i = this.nestedNodeSet.length - 1;
-				sibling.push(new GetGenStateNode(nestedNode, node => this.nestedNodeSet[i] = node));
+				nestedNode.getStateNode(node => this.nestedNodeSet[i] = node);
+				sibling.push({ node: nestedNode, ctx });
 			}
 			else {
 				// GenStateNodeSetの場合はそれを評価してノードをセットする
@@ -939,6 +936,8 @@ class StateNodeSet {
 class GenStateNodeSet {
 	/** @protected @type { (GenStateNode | GenStateNodeSet)[] } 管理しているネストを許容したノードの集合 */
 	nestedNodeSet;
+	/** @protected @type { ((node: StateNodeSet) => unknown)[] } buildCurrent時に同期的に生成したStateNodeを配信するためのコールバックのリスト */
+	#deliverStateNodeSetCallback = [];
 
 	/**
 	 * コンストラクタ
@@ -949,14 +948,37 @@ class GenStateNodeSet {
 	}
 
 	/**
-	 * 保持しているノードの取得と構築
-	 * @returns { { set: StateNodeSet; sibling: GetGenStateNode[] } }
+	 * buildStateNodeSet時にStateNodeSetを取得するためのコールバックの指定
+	 * @param { (node: StateNodeSet) => unknown } callback StateNodeを取得するためのコールバック
 	 */
-	buildStateNodeSet() {
-		/** @type { GetGenStateNode[] } */
+	getStateNodeSet(callback) {
+		this.#deliverStateNodeSetCallback.push(callback);
+		return this;
+	}
+
+	/**
+	 * 保持しているノードの取得と構築
+	 * @protected
+	 * @param { Context } ctx コンテキスト
+	 * @returns { { set: StateNodeSet; sibling: { node: GenStateNode; ctx: Context }[] } }
+	 */
+	buildStateNodeSetImpl(ctx) {
+		/** @type { { node: GenStateNode; ctx: Context }[] } */
 		const sibling = [];
-		const set = new StateNodeSet(this.nestedNodeSet, sibling);
+		const set = new StateNodeSet(ctx, this.nestedNodeSet, sibling);
 		return { set, sibling };
+	}
+
+	/**
+	 * 保持しているノードの取得と構築
+	 * @param { Context } ctx コンテキスト
+	 * @returns { { set: StateNodeSet; sibling: { node: GenStateNode; ctx: Context }[] } }
+	 */
+	buildStateNodeSet(ctx) {
+		const ret = this.buildStateNodeSetImpl(ctx);
+		this.#deliverStateNodeSetCallback.forEach(callback => callback(ret.set));
+		this.#deliverStateNodeSetCallback = [];
+		return ret;
 	}
 }
 
@@ -1025,24 +1047,94 @@ class GenStateTextNode extends GenStateNode {
 
 	/**
 	 * 自要素を構築する
-	 * @template { ComponentType<K> } K
-	 * @param { StateComponent<K> } stateComponent ノードを生成する場所
+	 * @protected
+	 * @param { Context } ctx ノードを生成する場所
 	 * @param { HTMLElement | Text | undefined } target マウント対象のDOMノード
-	 * @returns { { node: StateTextNode; gen?: GenStateNode; children: GenStateNode[] } }
+	 * @returns { { node: StateNode; gen?: GenStateNode; children: { node: GenStateNode; ctx: Context }[] } }
 	 */
-	buildCurrent(stateComponent, target) {
+	buildCurrentImpl(ctx, target) {
 		const text = this.#text;
 		const element = document.createTextNode('');
 		/** @type { { caller: CallerType; states: State<unknown>[] }[] } 呼び出し元のリスト */
 		const callerList = [];
 
 		// 子にテキストの状態が渡された場合は変更を監視する
-		const caller = this.ctx.setParam(text, val => {
+		const caller = ctx.setParam(text, val => {
 			element.data = val;
-		}, stateComponent.label);
+		}, ctx.component.label);
 		if (caller && caller.states.length > 0) callerList.push(caller);
 
-		return { node: new StateTextNode(this.ctx, element, callerList), children: [] };
+		return { node: new StateTextNode(ctx, element, callerList), children: [] };
+	}
+}
+
+/**
+ * placeholderを示すノード
+ */
+class StatePlaceholderNode extends StateNode {
+	/** @type { Text } DOMノード */
+	#element;
+
+	/**
+	 * コンストラクタ
+	 * @param { Context } ctx ノードを扱っているコンテキスト
+	 * @param { Text } element DOMノード
+	 */
+	constructor(ctx, element) {
+		super(ctx, []);
+		this.#element = element;
+	}
+
+	/**
+	 * DOMノードの取得
+	 * @returns { Text }
+	 */
+	get element() { return this.#element; }
+
+	/**
+	 * ノードの削除
+	 */
+	remove() {
+		super.remove();
+		this.#element.remove();
+	}
+}
+
+/**
+ * StatePlaceholderNodeを生成するためのノード
+ */
+class GenStatePlaceholderNode extends GenStateNode {
+	/**
+	 * コンストラクタ
+	 * @param { Context } ctx StateNodeを生成するコンテキスト
+	 */
+	constructor(ctx) {
+		super(ctx);
+	}
+
+	/**
+	 * atomicなGetStateNodeであるかの判定
+	 */
+	get isAtomic() { return true; }
+
+	/**
+	 * 別物のStateNodeを生成しても問題のないGetStateNodeを生成
+	 * @returns { GenStatePlaceholderNode }
+	 */
+	clone() {
+		return new GenStatePlaceholderNode(this.ctx);
+	}
+
+	/**
+	 * 自要素を構築する
+	 * @protected
+	 * @param { Context } ctx ノードを生成する場所
+	 * @param { HTMLElement | Text | undefined } target マウント対象のDOMノード
+	 * @returns { { node: StateNode; gen?: GenStateNode; children: { node: GenStateNode; ctx: Context }[] } }
+	 */
+	buildCurrentImpl(ctx, target) {
+		const element = document.createTextNode('');
+		return { node: new StatePlaceholderNode(ctx, element), children: [] };
 	}
 }
 
@@ -1111,12 +1203,12 @@ class GenStateHTMLElement extends GenStateNode {
 
 	/**
 	 * 自要素を構築する
-	 * @template { ComponentType<K> } K
-	 * @param { StateComponent<K> } stateComponent ノードを生成する場所
+	 * @protected
+	 * @param { Context } ctx ノードを生成する場所
 	 * @param { HTMLElement | Text | undefined } target マウント対象のDOMノード
-	 * @returns { { node: StateHTMLElement; gen?: GenStateNode; children: GenStateNode[] } }
+	 * @returns { { node: StateNode; gen?: GenStateNode; children: { node: GenStateNode; ctx: Context }[] } }
 	 */
-	buildCurrent(stateComponent, target) {
+	buildCurrentImpl(ctx, target) {
 		// ノードのチェック
 		if (target) {
 			if (target instanceof Text) {
@@ -1142,7 +1234,7 @@ class GenStateHTMLElement extends GenStateNode {
 			}
 		}
 
-		return { node: new StateHTMLElement(this.ctx, element, []), children: [] };
+		return { node: new StateHTMLElement(ctx, element, []), children: [] };
 	}
 }
 
@@ -1225,12 +1317,12 @@ class GenStateDomNode extends GenStateNode {
 
 	/**
 	 * 自要素を構築する
-	 * @template { ComponentType<K> } K
-	 * @param { StateComponent<K> } stateComponent ノードを生成する場所
+	 * @protected
+	 * @param { Context } ctx ノードを生成する場所
 	 * @param { HTMLElement | Text | undefined } target マウント対象のDOMノード
-	 * @returns { { node: StateDomNode; gen?: GenStateNode; children: GenStateNode[] } }
+	 * @returns { { node: StateNode; gen?: GenStateNode; children: { node: GenStateNode; ctx: Context }[] } }
 	 */
-	buildCurrent(stateComponent, target) {
+	buildCurrentImpl(ctx, target) {
 		// 観測を行う同一ノードの2回以上の生成は禁止
 		if (this.#genFlag && this.#observableStates) {
 			throw new Error('The buildCurrent in GenStateDomNode must not be called more than twice.');
@@ -1253,7 +1345,7 @@ class GenStateDomNode extends GenStateNode {
 		const callerList = [];
 
 		// StateDomとDOM更新を対応付けるラベルの生成
-		const label = stateComponent.label;
+		const label = ctx.component.label;
 
 		// プロパティの設定
 		for (const key in this.#props) {
@@ -1294,7 +1386,7 @@ class GenStateDomNode extends GenStateNode {
 					}
 					// 関数を設定する場合はエラーハンドリングを行うようにする
 					else if (val instanceof Function) {
-						element[key] = createWrapperFunction(val, stateComponent);
+						element[key] = createWrapperFunction(val, ctx.component);
 					}
 					// その他プロパティはそのまま設定する
 					else {
@@ -1306,14 +1398,14 @@ class GenStateDomNode extends GenStateNode {
 		}
 
 		// 子要素の構築
-		/** @type { GenStateNode[] } */
+		/** @type { { node: GenStateNode; ctx: Context }[] } */
 		const children = [];
 		for (const child of  this.#children) {
 			if (child instanceof GenStateNode) {
-				children.push(child);
+				children.push({ node: child, ctx });
 			}
 			else {
-				children.push(...child.buildStateNodeSet().sibling);
+				children.push(...child.buildStateNodeSet(ctx).sibling);
 			}
 		}
 
@@ -1469,8 +1561,6 @@ class StateComponent extends StateNode {
 	genStateNode;
 	/** @protected @type { StateNode | undefined } コンポーネントを代表するノード */
 	node = undefined;
-	/** @type { LifeCycle } ライフサイクル */
-	#lifecycle = {};
 	/** @type { DomUpdateCallerLabel<K> | undefined } DOM更新の際に用いるラベル */
 	#label = undefined;
 
@@ -1479,9 +1569,10 @@ class StateComponent extends StateNode {
 	 * @template { ComponentType<K2> } K2
 	 * @param { Context } ctx コンポーネントを扱っているコンテキスト
 	 * @param { StateComponent<K2> | undefined } parent 親コンポーネント
+	 * @param { { caller: CallerType; states: State<unknown>[] }[] } callerList 呼び出し元のリスト
 	 */
-	constructor(ctx, parent) {
-		super(ctx, []);
+	constructor(ctx, parent, callerList) {
+		super(ctx, callerList);
 		this.#parent = parent;
 	}
 
@@ -1510,35 +1601,15 @@ class StateComponent extends StateNode {
 	 * @return {{ gen: GenStateNode; children: GenStateNode[] }}
 	 */
 	build(component, props, children, observableStates) {
-		/** @type { CompPropTypes<K> } コンポーネントに渡すプロパティ */
-		const compProps = {};
-		// プロパティは単方向データに変換して渡すようにする
-		for (const key in props) {
-			const { state, caller } = props[key].unidirectional(this.ctx);
-			if (caller && caller.states.length > 0) this.callerList.push(caller);
-			compProps[key] = state;
-		}
 
 		// ノードの生成
-		/** @type { ComponentExposeStates<K> | {} } コンポーネントが公開している状態 */
-		let exposeStates = {};
 		try {
-			({ genStateNode: this.genStateNode, exposeStates, lifecycle: this.#lifecycle } = this.ctx.buildComponent(component, compProps, children));
+			this.genStateNode = this.ctx.buildComponent(component, props, children, observableStates);
 		}
 		catch (e) {
 			// 状態変数の関連付けを破棄してから例外をリスロー
-			this.callerList.forEach(caller => caller.states.forEach(state => state.delete(caller.caller)));
+			this.detach();
 			throw e;
-		}
-
-		// 観測の評価
-		if (observableStates) {
-			for (const key in observableStates) {
-				const state = observableStates[key];
-				const exposeState = exposeStates[key];
-				// 状態の観測の実施
-				state.observe(exposeState);
-			}
 		}
 
 		return this.buildRepComponent(this.genStateNode);
@@ -1548,27 +1619,27 @@ class StateComponent extends StateNode {
 	 * コンポーネントを代表するノードを構築する
 	 * @protected
 	 * @param { GenStateNode } genStateNode コンポーネント代表するノードを生成するノード
-	 * @return {{ gen: GenStateNode; children: GenStateNode[] }}
+	 * @return {{ gen: GenStateNode; children: { node: GenStateNode; ctx: Context }[] }}
 	 */
 	buildRepComponent(genStateNode) {
-		/** @type {{ gen?: GenStateNode; children?: GenStateNode[] }} */
+		/** @type {{ gen?: GenStateNode; children?: { node: GenStateNode; ctx: Context }[] }} */
 		const result = {};
 
 		// nodeの設定
 		if (!genStateNode.isAtomic && !(genStateNode instanceof GenStateComponent)) {
 			try {
-				({ node: this.node, gen: result.gen, children: result.children } = genStateNode.buildCurrent());
+				({ node: this.node, gen: result.gen, children: result.children } = genStateNode.buildCurrent(genStateNode.ctx));
 			}
 			catch (e) {
 				// コンポーネントの要素の構築をキャンセルし、現在の要素としてはダミーを設置
 				// 復帰が可能でありかつ復帰を行う場合はthis.rebuildChild()などの各コンポーネントにより行う
-				result.gen = new GetGenStateNode(new GenStateTextNode(this.ctx, ''), node => this.node = node);
+				result.gen = (new GenStateTextNode(this.ctx, '')).getStateNode(node => this.node = node);
 				result.children = [];
 				this.onErrorCaptured(e, this);
 			}
 		}
 		else {
-			result.gen = new GetGenStateNode(genStateNode, node => this.node = node);
+			result.gen = genStateNode.getStateNode(node => this.node = node);
 			result.children = [];
 		}
 
@@ -1599,26 +1670,26 @@ class StateComponent extends StateNode {
 	}
 
 	onMount() {
-		if (this.#lifecycle.onMount) {
-			this.ctx.updateState(this.#lifecycle.onMount);
+		if (this.ctx.lifecycle.onMount) {
+			this.ctx.updateState(this.ctx.lifecycle.onMount);
 		}
 	}
 
 	onUnmount() {
-		if (this.#lifecycle.onUnmount) {
-			this.ctx.updateState(this.#lifecycle.onUnmount);
+		if (this.ctx.lifecycle.onUnmount) {
+			this.ctx.updateState(this.ctx.lifecycle.onUnmount);
 		}
 	}
 
 	onBeforeUpdate() {
-		if (this.#lifecycle.onBeforeUpdate) {
-			this.ctx.updateState(this.#lifecycle.onBeforeUpdate);
+		if (this.ctx.lifecycle.onBeforeUpdate) {
+			this.ctx.updateState(this.ctx.lifecycle.onBeforeUpdate);
 		}
 	}
 
 	onAfterUpdate() {
-		if (this.#lifecycle.onAfterUpdate) {
-			this.ctx.updateState(this.#lifecycle.onAfterUpdate);
+		if (this.ctx.lifecycle.onAfterUpdate) {
+			this.ctx.updateState(this.ctx.lifecycle.onAfterUpdate);
 		}
 	}
 
@@ -1630,16 +1701,16 @@ class StateComponent extends StateNode {
 	onErrorCaptured(error, component, handledTimes = 0) {
 		/** @type { boolean }  */
 		let prop = true;
-		if (this.#lifecycle.onErrorCaptured) {
+		if (this.ctx.lifecycle.onErrorCaptured) {
 			prop = false;
 			// 遅延評価せず即時に評価する
-			for (const callback of this.#lifecycle.onErrorCaptured) {
+			for (const callback of this.ctx.lifecycle.onErrorCaptured) {
 				const val = callback(error, component);
 				if (val !== false) {
 					prop = true;
 				}
 			}
-			handledTimes += this.#lifecycle.onErrorCaptured.length;
+			handledTimes += this.ctx.lifecycle.onErrorCaptured.length;
 		}
 
 		if (prop) {
@@ -1660,7 +1731,7 @@ class StateComponent extends StateNode {
  * @template { ComponentType<K> } K
  */
 class GenStateComponent extends GenStateNode {
-	/** @protected @type { K } コンポーネントを示す関数 */
+	/** @protected @type { Function } コンポーネントを示す関数 */
 	component;
 	/** @protected @type { CompPropTypes<K> } プロパティ */
 	props;
@@ -1694,38 +1765,48 @@ class GenStateComponent extends GenStateNode {
 	}
 
 	/**
-	 * 自要素を構築する
-	 * @template { ComponentType<K2> } K2
-	 * @param { StateComponent<K2> | undefined } stateComponent ノードを生成する場所
-	 * @param { HTMLElement | Text | undefined } target マウント対象のDOMノード
-	 * @returns { { node: StateComponent; gen?: GenStateNode; children: GenStateNode[] } }
+	 * StateComponentの生成
+	 * @param { Context } ctx コンポーネントが属することになるコンテキスト
+	 * @param { StateComponent | undefined } parent 親コンポーネント
+	 * @param { { caller: CallerType; states: State<unknown>[] }[] } callerList 呼び出し元のリスト
 	 */
-	buildCurrent(stateComponent, target) {
+	generateStateComponent(ctx, parent, callerList) {
+		return new StateComponent(ctx, parent, callerList);
+	}
+
+	/**
+	 * 自要素を構築する
+	 * @protected
+	 * @param { Context } ctx ノードを生成する場所
+	 * @param { HTMLElement | Text | undefined } target マウント対象のDOMノード
+	 * @returns { { node: StateNode; gen?: GenStateNode; children: { node: GenStateNode; ctx: Context }[] } }
+	 */
+	buildCurrentImpl(ctx, target) {
 		// 観測を行う同一ノードの2回以上の生成は禁止
 		if (this.#genFlag && this.observableStates) {
 			throw new Error('The buildCurrent in GenStateComponent must not be called more than twice.');
 		}
 
+		/** @type { { caller: CallerType; states: State<unknown>[] }[] } 呼び出し元のリスト */
+		const callerList = [];
+
+		/** @type { CompPropTypes<K> } コンポーネントに渡すプロパティ */
+		const compProps = {};
+		// プロパティは単方向データに変換して渡すようにする
+		for (const key in this.props) {
+			const { state, caller } = this.props[key].unidirectional(this.ctx);
+			if (caller && caller.states.length > 0) callerList.push(caller);
+			compProps[key] = state;
+		}
+
 		/** 生成するコンポーネントが属するコンテキストとそのコンポーネント */
-		const node = this.buildContext(stateComponent);
+		const node = ctx.generateContextForComponent(_ctx => this.generateStateComponent(_ctx, ctx.component, callerList)).component;
 
 		// コンポーネントを構築して返す
-		const result = node.build(this.component, this.props, this.children, this.observableStates);
+		const result = node.build(this.component, compProps, this.children, this.observableStates);
 		this.#genFlag = true;
 
 		return { node, ...result };
-	}
-
-	/**
-	 * コンポーネントが属するコンテキストを生成し、それをもつコンポーネントを返す
-	 * @protected
-	 * @template { ComponentType<K2> } K2
-	 * @param { StateComponent<K2> | undefined } stateComponent ノードを生成する場所
-	 * @returns { StateComponent<K> }
-	 */
-	buildContext(stateComponent) {
-		const ctx = new Context(stateComponent ? stateComponent.ctx : this.ctx, ctx => new StateComponent(ctx, stateComponent));
-		return ctx.component;
 	}
 
 	/**
@@ -1738,6 +1819,106 @@ class GenStateComponent extends GenStateNode {
 		node.observableStates = props;
 		node.#genFlag = false;
 		return node;
+	}
+}
+
+/**
+ * 非同期コンポーネント
+ * @template { ComponentType<K> } K
+ */
+class StateAsyncComponent extends StateComponent {
+	/** @type { Promise } */
+	#finished;
+
+	/**
+	 * コンストラクタ
+	 * @template { ComponentType<K2> } K2
+	 * @param { Context } ctx コンポーネントを扱っているコンテキスト
+	 * @param { StateComponent<K2> | undefined } parent 親コンポーネント
+	 * @param { { caller: CallerType; states: State<unknown>[] }[] } callerList 呼び出し元のリスト
+	 */
+	constructor(ctx, parent, callerList) {
+		super(ctx, parent, callerList);
+		this.#finished = Promise.reject(() => new Error('Not yet initialized.'));
+		this.#finished.catch(() => {});
+	}
+
+	/**
+	 * 非同期コンポーネントの生成に関する終了状態のPromiseの取得
+	 */
+	get finished() {
+		return this.#finished;
+	}
+
+	/**
+	 * コンポーネントを構築する
+	 * @param { K } component コンポーネントを示す関数
+	 * @param { CompPropTypes<K> } props プロパティ
+	 * @param { CompChildrenType<K> } children 子要素
+	 * @param { ObservableStates<K> | undefined } observableStates 観測する対象
+	 * @return {{ gen: GenStateNode; children: GenStateNode[] }}
+	 */
+	build(component, props, children, observableStates) {
+
+		// コンポーネントの構築を行う関数
+		const buildAsyncComponent = async () => {
+			try {
+				this.genStateNode = await this.ctx.buildAsyncComponent(component, props, children, observableStates);
+			}
+			catch (e) {
+				// 状態変数の関連付けを破棄してから例外をリスロー
+				super.detach();
+				throw e;
+			}
+
+			// 葉まで構築して手動でonMountを発火
+			const prevNode = this.node;
+			this.node = this.genStateNode.build(this.ctx);
+			prevNode.element.replaceWith(this.node.element);
+			this.onMount();
+		};
+
+		// コンポーネントの構築はバックグラウンドで実行
+		this.#finished = this.ctx.capture(buildAsyncComponent);
+
+		// 初期表示はplaceholder固定
+		return this.buildRepComponent(new GenStatePlaceholderNode(this.ctx));
+	}
+}
+
+/**
+ * StateAsyncComponentを生成するためのノード
+ * @template { ComponentType<K> } K
+ */
+class GenStateAsyncComponent extends GenStateComponent {
+
+	/**
+	 * コンストラクタ
+	 * @param { Context } ctx StateNodeを生成するコンテキスト
+	 * @param { AsyncComponentType<K> } component コンポーネントを示す関数
+	 * @param { CompPropTypes<K> } props プロパティ
+	 * @param { CompChildrenType<K> } children 子要素
+	 */
+	constructor(ctx, component, props, children) {
+		super(ctx, component, props, children);
+	}
+
+	/**
+	 * 別物のStateNodeを生成しても問題のないGetStateNodeを生成
+	 * @returns { GenStateAsyncComponent<K> }
+	 */
+	clone() {
+		return new GenStateAsyncComponent(this.ctx, this.component, this.props, this.children);
+	}
+
+	/**
+	 * StateComponentの生成
+	 * @param { Context } ctx コンポーネントが属することになるコンテキスト
+	 * @param { StateComponent | undefined } parent 親コンポーネント
+	 * @param { { caller: CallerType; states: State<unknown>[] }[] } callerList 呼び出し元のリスト
+	 */	
+	generateStateComponent(ctx, parent, callerList) {
+		return new StateAsyncComponent(ctx, parent, callerList);
 	}
 }
 
@@ -1845,6 +2026,72 @@ class GenStateComponent extends GenStateNode {
  */
 
 /**
+ * SuspenseContext内部で管理しているローカルコンテキストのインターフェース
+ * @interface
+ */
+class ILocalSuspenseContext {
+	/**
+	 * 非同期関数をキャプチャしてバックグラウンドで実行する
+	 * @param { Context } ctx 非同期関数が発行されたコンテキスト
+	 * @param { () => Promise<unknown> } callback キャプチャする非同期関数
+	 * @param { boolean } cancellable キャンセル可能かの設定
+	 */
+	async capture(ctx, callback, cancellable) { throw new Error('not implemented.'); }
+}
+
+/**
+ * Suspenseに関するコンテキスト
+ */
+class SuspenseContext {
+	/** @type { ILocalSuspenseContext[] } 現在のSuspenseの状態のスタック */
+	#stack;
+
+	/**
+	 * コンストラクタ
+	 * @param { ILocalSuspenseContext | undefined } localSuspenseCtx コンテキストが示すSuspenseに関するローカルコンテキスト
+	 */
+	constructor(localSuspenseCtx = undefined) {
+		this.#stack = localSuspenseCtx ? [localSuspenseCtx] : [];
+	}
+
+	get current() { return this.#stack.length === 0 ? undefined : this.#stack[this.#stack.length - 1]; }
+
+	/**
+	 * コンテキストの切り替え
+	 * @param { () => unknown } callback コンテキストの切り替えが行われるコールバック
+	 * @param { ILocalSuspenseContext } localSuspenseCtx callback実行中のみ利用するローカルコンテキスト
+	 */
+	switch(callback, localSuspenseCtx) {
+		this.#stack.push(localSuspenseCtx);
+		callback();
+		this.#stack.pop();
+	}
+
+	/**
+	 * 非同期関数をキャプチャしてバックグラウンドで実行する
+	 * @param { Context } ctx 非同期関数が発行されたコンテキスト
+	 * @param { () => Promise<unknown> } callback キャプチャする非同期関数
+	 * @param { boolean } cancellable キャンセル可能かの設定
+	 */
+	async capture(ctx, callback, cancellable = true) {
+		await new Promise(resolve => {
+			const f = async () => {
+				const current = this.current;
+				if (current) {
+					await current.capture(ctx, callback, cancellable);
+				}
+				else {
+					await callback();
+				}
+				resolve();
+			};
+			// 標準で遅延実行する
+			ctx.updateState([{ caller: f }]);
+		});
+	}
+}
+
+/**
  * コンテキスト
  */
 class Context {
@@ -1857,25 +2104,52 @@ class Context {
 
 	/** @type { DomUpdateController } DOMの更新のためのコントローラ */
 	#domUpdateController;
-	/** @type { Set<CallerType>[] } 遅延評価対象の呼び出し元の集合についてのスタック */
+	/** @type { Map<StateComponent<unknown> | undefined, Set<CallerType>>[] } 遅延評価対象の呼び出し元の集合についてのスタック */
 	#lazyUpdateStack = [];
+
+	/** @type { SuspenseContext } Suspenseのコンテキスト */
+	#suspenseCtx;
 
 	/**
 	 * コンストラクタ
-	 * @param { Context | undefined } ctx 生成元となるコンテキスト
-	 * @param { ((ctx: Context) => StateComponent<unknown>) | undefined } gen コンポーネントを示すノードを生成する関数
+	 * @param { DomUpdateController | undefined } domUpdateController DOMの更新のためのコントローラ
+	 * @param { SuspenseContext | undefined } suspenseCtx Suspenseのコンテキスト
 	 */
-	constructor(ctx = undefined, gen = undefined) {
-		if (ctx && gen) {
-			this.#domUpdateController = ctx.#domUpdateController;
-			this.#component = gen(this);
-		}
-		else {
-			this.#domUpdateController = new DomUpdateController();
-		}
+	constructor(domUpdateController = undefined, suspenseCtx = undefined) {
+		this.#domUpdateController = domUpdateController ?? new DomUpdateController();
+		this.#suspenseCtx = suspenseCtx ?? new SuspenseContext();
+	}
+
+	/**
+	 * コンポーネントが属するコンテキストを生成する
+	 * @param { (ctx: Context) => StateComponent<unknown> } gen コンポーネントを示すノードを生成する関数
+	 * @returns { Context }
+	 */
+	generateContextForComponent(gen) {
+		const ctx = new Context(this.#domUpdateController, this.#suspenseCtx);
+		ctx.#stack = this.#stack;
+		ctx.#component = gen(ctx);
+		ctx.#lazyUpdateStack = this.#lazyUpdateStack;
+		return ctx;
+	}
+
+	/**
+	 * Suspenseが属するコンテキストを生成する
+	 * @param { SuspenseContext } suspenseCtx 新たに生成するコンテキストがもつSuspenseのコンテキスト
+	 * @returns { Context }
+	 */
+	generateContextForSuspense(suspenseCtx) {
+		const ctx = new Context(this.#domUpdateController, suspenseCtx);
+		ctx.#stack = this.#stack;
+		ctx.#lifecycle = this.#lifecycle;
+		ctx.#component = this.#component;
+		ctx.#lazyUpdateStack = this.#lazyUpdateStack;
+		return ctx;
 	}
 
 	get component() { return this.#component; }
+
+	get suspense() { return this.#suspenseCtx; }
 
 	get current() { return this.#stack.length === 0 ? undefined : this.#stack[this.#stack.length - 1].caller; }
 
@@ -1892,13 +2166,23 @@ class Context {
 	}
 
 	/**
+	 * 非同期関数をキャプチャしてバックグラウンドで実行する
+	 * @param { () => Promise<unknown> } callback キャプチャする非同期関数
+	 * @param { boolean } cancellable キャンセル可能かの設定
+	 */
+	async capture(callback, cancellable = true) {
+		await this.#suspenseCtx.capture(this, callback, cancellable);
+	}
+
+	/**
 	 * 状態の更新の通知を行う
 	 * @param { Iterable<CallerType> } itr 状態の参照先のハンドラ
 	 */
 	updateState(itr) {
 		// 状態の遅延評価を行う場合は遅延評価を行う対象の集合に記憶する
 		if (this.#lazyUpdateStack.length > 0) {
-			const set = this.#lazyUpdateStack[this.#lazyUpdateStack.length - 1];
+			const map = this.#lazyUpdateStack[this.#lazyUpdateStack.length - 1];
+			const set = map.has(this.#component) ? map.get(this.#component) : map.set(this.#component, new Set()).get(this.#component);
 			for (const val of itr) {
 				set.add(val);
 			}
@@ -1936,11 +2220,12 @@ class Context {
 	 * @returns { () => void } 状態変数の変更の伝播を行う関数
 	 */
 	lazy(callback) {
-		const set = new Set();
-		this.#lazyUpdateStack.push(set);
+		/** @type { Map<StateComponent<unknown> | undefined, Set<CallerType>> } */
+		const map = new Map();
+		this.#lazyUpdateStack.push(map);
 		callback();
 		this.#lazyUpdateStack.pop();
-		return set.size === 0 ? () => {} : () => this.updateState(set);
+		return map.size === 0 ? () => {} : () => map.forEach((set, component) => (component?.ctx ?? this).updateState(set));
 	}
 
 	/**
@@ -2104,9 +2389,19 @@ class Context {
 	}
 
 	/**
+	 * 非同期コンポーネントであることの判定
+	 * @template K
+	 * @param { ComponentType<K> | AsyncComponentType<K> } f 
+	 * @returns { f is AsyncComponentType<K> }
+	 */
+	static #isAsyncComponent(f) {
+		return f.constructor?.name === 'AsyncFunction';
+	}
+
+	/**
 	 * @template { string | ComponentType<K> } K
 	 * @overload
-	 * @param { K } tag HTMLタグ
+	 * @param { K extends string ? K : K | AsyncComponentType<K> } tag HTMLタグ
 	 * @param { RequiredCtxPropTypes<CtxPropTypes<K>> extends {} ? CtxPropTypes<K> | undefined : CtxPropTypes<K> } props プロパティ
 	 * @param { RequiredCtxChildType<CtxChildType<K>> extends [] ? CtxChildType<K> | undefined : CtxChildType<K> } children 子要素
 	 * @returns { K extends string ? GenStateDomNode<K> : (true extends K['early'] ? ReturnType<K> : GenStateComponent<K>) }
@@ -2114,7 +2409,7 @@ class Context {
 	/**
 	 * @template { string | ComponentType<K> } K
 	 * @overload
-	 * @param { RequiredCtxPropTypes<CtxPropTypes<K>> extends {} ? K : never } tag HTMLタグ
+	 * @param { RequiredCtxPropTypes<CtxPropTypes<K>> extends {} ? (K extends string ? K : K | AsyncComponentType<K>) : never } tag HTMLタグ
 	 * @param { RequiredCtxPropTypes<CtxPropTypes<K>> extends {} ? CtxChildType<K> : never } props 子要素
 	 * @param { RequiredCtxPropTypes<CtxPropTypes<K>> extends {} ? undefined : never } children 略
 	 * @returns { K extends string ? GenStateDomNode<K> : (true extends K['early'] ? ReturnType<K> : GenStateComponent<K>) }
@@ -2122,7 +2417,7 @@ class Context {
 	/**
 	 * DOMノード/コンポーネントの生成
 	 * @template { string | ComponentType<K> } K
-	 * @param { K } tag HTMLタグ
+	 * @param { K extends string ? K : K | AsyncComponentType<K> } tag HTMLタグ
 	 * @param { CtxPropTypes<K> | CtxChildType<K> | undefined } props プロパティ
 	 * @param { CtxChildType<K> | undefined } children 子要素
 	 * @returns { K extends string ? GenStateDomNode<K> : (true extends K['early'] ? ReturnType<K> : GenStateComponent<K>) }
@@ -2142,7 +2437,12 @@ class Context {
 			if (tag.early === true) {
 				return tag(this, compProps, _children);
 			}
+			else if (Context.#isAsyncComponent(tag)) {
+				// 非同期コンポーネントの生成
+				return new GenStateAsyncComponent(this, tag, compProps, _children);
+			}
 			else {
+				// 同期コンポーネントの生成
 				return new GenStateComponent(this, tag, compProps, _children);
 			}
 		}
@@ -2192,30 +2492,62 @@ class Context {
 	}
 
 	/**
-	 * コンポーネントを示す関数を実行する
+	 * 自コンテキストで動作するコンポーネントを示す関数を実行するの実装部
+	 * @template { ComponentType<K> } K
+	 * @param { ReturnType<K> } compResult コンポーネントを示す関数の実行結果
+	 * @param { ObservableStates<K> | undefined } observableStates 観測する対象
+	 * @returns { GenStateComponent }
+	 */
+	#buildComponentImpl(compResult, observableStates) {
+		if (compResult instanceof GenStateNode) {
+			return compResult;
+		}
+		else {
+			// 観測の評価
+			if (observableStates) {
+				const exposeStates = compResult.exposeStates ?? {};
+				for (const key in observableStates) {
+					const state = observableStates[key];
+					const exposeState = exposeStates[key];
+					// 状態の観測の実施
+					state.observe(exposeState);
+				}
+			}
+
+			return compResult.node;
+		}
+	}
+
+	/**
+	 * 自コンテキストで動作するコンポーネントを示す関数を実行する
 	 * @template { ComponentType<K> } K
 	 * @param { K } component コンポーネントを示す関数
 	 * @param { CompPropTypes<K> } props プロパティ
 	 * @param { GenStateNode[] } children 子要素
-	 * @returns {{ getStateNode: GenStateNode; exposeStates: ComponentExposeStates<K>; lifecycle: LifeCycle }}
+	 * @param { ObservableStates<K> | undefined } observableStates 観測する対象
+	 * @returns {{ getStateNode: GenStateNode; exposeStates: ComponentExposeStates<K> }}
 	 */
-	buildComponent(component, props, children) {
-		const compResult = component(this, props, children);
-
-		// 実行結果からコンポーネントが公開している状態等を分離
-		/** @type { GenStateNode | undefined } */
-		let genStateNode = undefined;
-		/** @type { ComponentExposeStates<K> | {} } */
-		let exposeStates = {};
-		if (compResult instanceof GenStateNode) {
-			genStateNode = compResult;
-		}
-		else {
-			genStateNode = compResult.node;
-			exposeStates = compResult.exposeStates ?? {};
-		}
-		return { genStateNode, exposeStates, lifecycle: this.#lifecycle };
+	buildComponent(component, props, children, observableStates) {
+		return this.#buildComponentImpl(component(this, props, children), observableStates);
 	}
+
+	/**
+	 * 自コンテキストで動作する非同期コンポーネントを示す関数を実行する
+	 * @template { ComponentType<K> } K
+	 * @param { AsyncComponentType<K> } component コンポーネントを示す関数
+	 * @param { CompPropTypes<K> } props プロパティ
+	 * @param { GenStateNode[] } children 子要素
+	 * @param { ObservableStates<K> | undefined } observableStates 観測する対象
+	 * @returns { Promise<{ getStateNode: GenStateNode; exposeStates: ComponentExposeStates<K> }> }
+	 */
+	async buildAsyncComponent(component, props, children, observableStates) {
+		return this.#buildComponentImpl(await component(this, props, children), observableStates);
+	}
+
+	/**
+	 * ライフサイクルの取得(異なるコンテキスト間でインスタンスを一致させるためにsetterは提供しない)
+	 */
+	get lifecycle() { return this.#lifecycle; }
 
 	/**
 	 * ライフサイクルの設定
@@ -2362,13 +2694,17 @@ export {
 	IState,
 	State,
 	StateNode,
+	StatePlaceholderNode,
 	StateNodeSet,
 	StateComponent,
+	StateAsyncComponent,
 	GenStateNode,
-	GetGenStateNode,
 	GenStateNodeSet,
 	GenStateTextNode,
+	GenStatePlaceholderNode,
 	GenStateComponent,
+	ILocalSuspenseContext,
+	SuspenseContext,
 	Context,
 	watch
 };
