@@ -1,5 +1,5 @@
 import { State, StateNode, StateNodeSet, GenStateNode, GenStateNodeSet, GenStatePlaceholderNode, Context, watch } from "../../src/core.js";
-import { SwitchingPage, SuspendGroup } from "../../src/async.js";
+import { SwitchingPage, SuspendGroup } from "./Suspense.js";
 
 /**
  * @template T
