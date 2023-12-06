@@ -1,5 +1,6 @@
-import { State, StateNode, StateNodeSet, GenStateNode, GenStateNodeSet, GenStatePlaceholderNode, Context, watch } from "../../src/core.js";
+import { State, StateNode, StateNodeSet, GenStateNode, GenStateNodeSet, GenStatePlaceholderNode, Context, watch, StateAsyncComponent } from "../../src/core.js";
 import { SwitchingPage, SuspendGroup } from "../../src/async.js";
+import { LocalSuspenseContextForCapture } from "./Suspense.js";
 
 /**
  * @template T
@@ -36,11 +37,20 @@ class ShowStateNodeSet extends StateNodeSet {
 				// 表示する要素が存在しないときは代わりにplaceholderを設置
 				const { set, sibling } = (new GenStateNodeSet(ctx.normalizeCtxChild(flag ? gen(next) : [new GenStatePlaceholderNode(ctx)]))).buildStateNodeSet();
 				this.nestedNodeSet = [set];
-				for (const { node, ctx } of sibling) {
-					node.build(ctx);
+				// 一時的にSuspenseの状態をスイッチして非同期処理のキャプチャを行う
+				const localSuspenseCtx = new LocalSuspenseContextForCapture();
+				ctx.suspense.switch(() => {
+					for (const { node, ctx } of sibling) {
+						node.build(ctx);
+					}
+				}, localSuspenseCtx);
+				// 全てのページ生成の解決後にキャプチャした非同期処理の解決をする
+				if ((props.fallthrough.value ?? false) && localSuspenseCtx.exists) {
+					ctx.capture(switchingPage.switching(async () => { await localSuspenseCtx.call(); return set; }, props.cancellable.value ?? true).then(() => localSuspenseCtx.resolve()), cancellable);
 				}
-				// ノードの切り替え
-				switchingPage.switching(set, props.cancellable.value ?? true);
+				else {
+					switchingPage.switching(async () => { await localSuspenseCtx.call(); return set; }, props.cancellable.value ?? true).then(() => localSuspenseCtx.resolve());
+				}
 			}
 		});
 		if (caller) {
@@ -63,13 +73,21 @@ class ShowStateNodeSet extends StateNodeSet {
 			this.nestedNodeSet = [set];
 			sibling.push(...sibling_);
 
-			ctx.onMount(() =>{
+			ctx.updateState([{ caller: () => {
 				const parent = this.first.element.parentElement;
 				const afterElement = this.last.element.nextElementSibling;
 				const set = this.nestedNodeSet[0];
+				const page = this.first instanceof StateAsyncComponent ? async () => { await this.first.finished; return set; } : set;
+				switchingPage.afterSwitching = props.initSwitching.value ?? false ? switchingPage.afterSwitching : undefined;
 				// ノードの切り替え
-				switchingPage.insertBefore(set, afterElement, parent, props.cancellable.value ?? true);
-			});
+				if (props.fallthrough.value ?? false) {
+					ctx.capture(() => switchingPage.insertBefore(page, afterElement, parent, props.cancellable.value ?? true), cancellable);
+				}
+				else {
+					switchingPage.insertBefore(page, afterElement, parent, props.cancellable.value ?? true);
+				}
+				switchingPage.afterSwitching = props.onAfterSwitching.value;
+			}}]);
 		}
 	}
 
@@ -87,8 +105,6 @@ class ShowStateNodeSet extends StateNodeSet {
  * @template T
  */
 class GenShowStateNodeSet extends GenStateNodeSet {
-	/** @type { Context } props.targetの扱っているコンテキスト */
-	#ctx;
 	/** @type { CompPropTypes<typeof When<T>> } プロパティ */
 	#props;
 	/** @type { (v: T) => (GenStateNode | GenStateNodeSet)[] } ノードを生成する関数 */
@@ -96,13 +112,11 @@ class GenShowStateNodeSet extends GenStateNodeSet {
 
 	/**
 	 * コンストラクタ
-	 * @param { Context } ctx 状態変数を扱っているコンテキスト
 	 * @param { CompPropTypes<typeof When<T>> } props 
 	 * @param { (v: T) => (GenStateNode | GenStateNodeSet)[] } gen
 	 */
-	constructor(ctx, props, gen) {
+	constructor(props, gen) {
 		super([]);
-		this.#ctx = ctx;
 		this.#props = props;
 		this.#gen = gen;
 	}
@@ -129,7 +143,7 @@ class GenShowStateNodeSet extends GenStateNodeSet {
 	buildStateNodeSet(ctx) {
 		/** @type { { node: GenStateNode; ctx: Context }[] } */
 		const sibling = [];
-		const set = new ShowStateNodeSet(this.#ctx, sibling, this.#props, this.#gen);
+		const set = new ShowStateNodeSet(ctx, sibling, this.#props, this.#gen);
 		return { set, sibling };
 	}
 }
@@ -143,7 +157,7 @@ class GenShowStateNodeSet extends GenStateNodeSet {
  * @returns 
  */
 function When(ctx, props, children) {
-	return new GenShowStateNodeSet(ctx, props, children)
+	return new GenShowStateNodeSet(props, children)
 }
 /**
  * @template T
@@ -157,8 +171,12 @@ When.propTypes = {
 	onBeforeSwitching: undefined,
 	/** @type { ((node: StateNode) => Promise | undefined) | undefined } ノード挿入後に実行されるイベント */
 	onAfterSwitching: undefined,
-	/** @type { boolean } ノードの切り替え処理がキャンセル可能かの設定 */
-	cancellable: true
+	/** @type { boolean | undefined } ノードの切り替え処理がキャンセル可能かの設定(undefinedでtrueの場合と同等) */
+	cancellable: undefined,
+	/** @type { boolean | undefined } 初期表示でonAfterSwitchingが実行されるか(undefinedでfalseの場合と同等) */
+	initSwitching: undefined,
+	/** @type { boolean | undefined } ノードの切り替えで生じる非同期処理を親へ伝播するか */
+	fallthrough: undefined
 };
 /** @type { true } */
 When.early = true;
@@ -201,12 +219,22 @@ class WhenStateNodeSet extends StateNodeSet {
 					// ノードを構築
 					const { set, sibling } = genStateNodeSet.buildStateNodeSet(ctx);
 					this.nestedNodeSet = [set];
-					for (const { node, ctx } of sibling) {
-						node.build(ctx);
+					// 一時的にSuspenseの状態をスイッチして非同期処理のキャプチャを行う
+					const localSuspenseCtx = new LocalSuspenseContextForCapture();
+					ctx.suspense.switch(() => {
+						for (const { node, ctx } of sibling) {
+							node.build(ctx);
+						}
+					}, localSuspenseCtx);
+					// 全てのページ生成の解決後にキャプチャした非同期処理の解決をする
+					const cancellable = (this.#prevChooseIndex >= 0 ? nestedNodeSet[this.#prevChooseIndex].props.cancellable.value : undefined) ?? props.cancellable.value;
+					const fallthrough = (this.#prevChooseIndex >= 0 ? nestedNodeSet[this.#prevChooseIndex].props.fallthrough.value : undefined) ?? props.fallthrough.value;
+					if (fallthrough) {
+						ctx.capture(() => switchingPage.switching(async () => { await localSuspenseCtx.call(); return set; }, cancellable).then(() => localSuspenseCtx.resolve()), cancellable);
 					}
-					// ノードの切り替え
-					const whenCancellable = this.#prevChooseIndex >= 0 ? nestedNodeSet[this.#prevChooseIndex].props.cancellable.value : undefined;
-					switchingPage.switching(set, whenCancellable ?? props.cancellable.value);
+					else {
+						switchingPage.switching(async () => { await localSuspenseCtx.call(); return set; }, cancellable).then(() => localSuspenseCtx.resolve());
+					}
 					switchingPage.afterSwitching = props.onAfterSwitching.value;
 					switchingPage.beforeSwitching = props.onBeforeSwitching.value;
 				}
@@ -229,16 +257,25 @@ class WhenStateNodeSet extends StateNodeSet {
 		this.nestedNodeSet = [set];
 		sibling.push(...sibling_);
 
-		ctx.onMount(() =>{
+		ctx.updateState([{ caller: () => {
 			const parent = this.first.element.parentElement;
 			const afterElement = this.last.element.nextElementSibling;
 			const set = this.nestedNodeSet[0];
+			const page = this.first instanceof StateAsyncComponent ? async () => { await this.first.finished; return set; } : set;
+			const initSwitching = (this.#prevChooseIndex >= 0 ? nestedNodeSet[this.#prevChooseIndex].props.initSwitching.value : undefined) ?? props.initSwitching.value;
+			switchingPage.afterSwitching = initSwitching ? switchingPage.afterSwitching : undefined;
 			// ノードの切り替え
-			const whenCancellable = this.#prevChooseIndex >= 0 ? nestedNodeSet[this.#prevChooseIndex].props.cancellable.value : undefined;
-			switchingPage.insertBefore(set, afterElement, parent, whenCancellable ?? props.cancellable.value);
+			const cancellable = (this.#prevChooseIndex >= 0 ? nestedNodeSet[this.#prevChooseIndex].props.cancellable.value : undefined) ?? props.cancellable.value;
+			const fallthrough = (this.#prevChooseIndex >= 0 ? nestedNodeSet[this.#prevChooseIndex].props.fallthrough.value : undefined) ?? props.fallthrough.value;
+			if (fallthrough) {
+				ctx.capture(() => switchingPage.insertBefore(page, afterElement, parent, cancellable), cancellable);
+			}
+			else {
+				switchingPage.insertBefore(page, afterElement, parent, cancellable);
+			}
 			switchingPage.afterSwitching = props.onAfterSwitching.value;
 			switchingPage.beforeSwitching = props.onBeforeSwitching.value;
-		});
+		}}]);
 	}
 
 	/**
@@ -300,20 +337,16 @@ class WhenStateNodeSet extends StateNodeSet {
  * @template T
  */
 class GenWhenStateNodeSet extends GenStateNodeSet {
-	/** @type { Context } props.targetの扱っているコンテキスト */
-	#ctx;
 	/** @type { CompPropTypes<typeof Choose<T>> } プロパティ */
 	#props;
 
 	/**
 	 * コンストラクタ
-	 * @param { Context } ctx 状態変数を扱っているコンテキスト
 	 * @param { CompPropTypes<typeof Choose<T>> } props 
 	 * @param { GenShowStateNodeSet[] } nestedNodeSet
 	 */
-	constructor(ctx, props, nestedNodeSet) {
+	constructor(props, nestedNodeSet) {
 		super(nestedNodeSet);
-		this.#ctx = ctx;
 		this.#props = props;
 	}
 
@@ -325,7 +358,7 @@ class GenWhenStateNodeSet extends GenStateNodeSet {
 	buildStateNodeSet(ctx) {
 		/** @type { { node: GenStateNode; ctx: Context }[] } */
 		const sibling = [];
-		const set = new WhenStateNodeSet(this.#ctx, sibling, this.#props, this.nestedNodeSet);
+		const set = new WhenStateNodeSet(ctx, sibling, this.#props, this.nestedNodeSet);
 		return { set, sibling };
 	}
 }
@@ -339,7 +372,7 @@ class GenWhenStateNodeSet extends GenStateNodeSet {
  * @returns 
  */
 function Choose(ctx, props, children) {
-	return new GenWhenStateNodeSet(ctx, props, children)
+	return new GenWhenStateNodeSet(props, children)
 }
 /**
  * @template T
@@ -352,7 +385,11 @@ Choose.propTypes = {
 	/** @type { ((node: StateNode) => Promise | undefined) | undefined } ノード挿入後に実行されるイベント */
 	onAfterSwitching: undefined,
 	/** @type { boolean } ノードの切り替え処理がキャンセル可能かの設定 */
-	cancellable: true
+	cancellable: true,
+	/** @type { boolean } 初期表示でonAfterSwitchingが実行されるか */
+	initSwitching: false,
+	/** @type { boolean } ノードの切り替えで生じる非同期処理を親へ伝播するか */
+	fallthrough: false
 };
 /** @type { true } */
 Choose.early = true;

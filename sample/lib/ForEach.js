@@ -7,13 +7,22 @@ import { SwitchingPage, SuspendGroup } from "../../src/async.js";
  */
 
 /**
+ * @typedef {{
+ * 		set: StateNodeSet;
+ * 		switching: SwitchingPage;
+ * 		callerList: { caller: CallerType; states: State<unknown>[] }[];
+ * 		index: number
+ * }} KeyTypeOfVariableStateNodeSet ForEachについてのキーの型
+ */
+
+/**
  * ノードを選択するノード
  * @template T
  */
 class VariableStateNodeSet extends StateNodeSet {
 	/** @type { CompPropTypes<typeof ForEach<T>> } プロパティ */
 	#props;
-	/** @type { Map<unknown, { set: StateNodeSet, switching: SwitchingPage; index: number }> } 現在のノードの集合のキーのリスト */
+	/** @type { Map<unknown, KeyTypeOfVariableStateNodeSet> } 現在のノードの集合のキーのリスト */
 	#keyList = new Map();
 	/** @type { { caller: CallerType; states: State<unknown>[] }[] } 呼び出し元のリスト(これの破棄により親との関連付けが破棄される) */
 	callerList = [];
@@ -46,7 +55,7 @@ class VariableStateNodeSet extends StateNodeSet {
 					if (this.#keyList.has(key)) {
 						// 現在表示している対象の表示の場合はノードを移動させる
 						const val = this.#keyList.get(key);
-						keyList.set(key, { set: val.set, switching: val.switching, index: i });
+						keyList.set(key, { set: val.set, switching: val.switching, callerList: val.callerList, index: i });
 						nodeSetList.push(val.set);
 						this.#keyList.delete(key);
 					}
@@ -60,13 +69,15 @@ class VariableStateNodeSet extends StateNodeSet {
 						const suspendGroup = new SuspendGroup();
 						const switchingPage = new SwitchingPage(suspendGroup);
 						// 各種イベントのインスタンスの単方向関連付け
-						ctx.call(() => {
-							switchingPage.afterSwitching = props.onAfterSwitching.value;
-						});
-						ctx.call(() => {
-							switchingPage.beforeSwitching = props.onBeforeSwitching.value;
-						});
-						keyList.set(key, { set, switching: switchingPage, index: i });
+						const callerList= [
+							ctx.call(() => {
+								switchingPage.afterSwitching = props.onAfterSwitching.value;
+							}),
+							ctx.call(() => {
+								switchingPage.beforeSwitching = props.onBeforeSwitching.value;
+							})
+						];
+						keyList.set(key, { set, switching: switchingPage, callerList, index: i });
 						nodeSetList.push(set);
 						for (const { node, ctx } of sibling) {
 							node.build(ctx);
@@ -132,34 +143,38 @@ class VariableStateNodeSet extends StateNodeSet {
 			const suspendGroup = new SuspendGroup();
 			const switchingPage = new SwitchingPage(suspendGroup);
 			// 各種イベントのインスタンスの単方向関連付け
-			ctx.call(() => {
-				switchingPage.afterSwitching = props.onAfterSwitching.value;
-			});
-			ctx.call(() => {
-				switchingPage.beforeSwitching = props.onBeforeSwitching.value;
-			});
+			const callerList= [
+				ctx.call(() => {
+					switchingPage.afterSwitching = props.onAfterSwitching.value;
+				}),
+				ctx.call(() => {
+					switchingPage.beforeSwitching = props.onBeforeSwitching.value;
+				})
+			];
 			// ノードの設定
-			this.#keyList.set(key, { set, switching: switchingPage, index: this.#keyList.size });
+			this.#keyList.set(key, { set, switching: switchingPage, callerList, index: this.#keyList.size });
 			this.nestedNodeSet.push(set);
 			sibling.push(...sibling_);
 		}
 
-		ctx.onMount(() =>{
+		ctx.updateState([{ caller: () => {
 			// ノードの切り替え
-			const cancellable = props.cancellable.value ?? true;
+			const cancellable = props.cancellable.value;
 			for (const { set, switching } of this.#keyList.values()) {
 				const parent = set.first.element.parentElement;
 				const afterElement = set.last.element.nextElementSibling;
+				switching.afterSwitching = props.initSwitching.value ? switching.afterSwitching : undefined;
 				switching.insertBefore(set, afterElement, parent, cancellable);
+				switching.afterSwitching = props.onAfterSwitching.value;
 			}
-		});
+		}}]);
 	}
 
 	/**
 	 * ノードリストのセットアップを行う
 	 * @param { HTMLElement | Text } afterElement 前回のノードリストにおける一番最初のノード(parentは存在する前提とする)
 	 * @param { Node | undefined } endNode 前回のノードリストにおける一番最後のノードの次のノード
-	 * @param { { set: StateNodeSet, switching: SwitchingPage; index: number }[] } deleteNodeSet 削除対象のノード
+	 * @param { Iterable<KeyTypeOfVariableStateNodeSet> } deleteNodeSet 削除対象のノード
 	 */
 	#setupNodeList(afterElement, endNode, deleteNodeSet) {
 		const parent = afterElement.parentElement;
@@ -211,8 +226,6 @@ class VariableStateNodeSet extends StateNodeSet {
  * @template T
  */
 class GenVariableStateNodeSet extends GenStateNodeSet {
-	/** @type { Context } props.targetの扱っているコンテキスト */
-	#ctx;
 	/** @type { CompPropTypes<typeof ForEach<T>> } プロパティ */
 	#props;
 	/** @type { (v: T, key?: unknown, genkey?: (typeof ForEach['propTypes']['key'])) => (GenStateNode | GenStateNodeSet)[] } ノードを生成する関数 */
@@ -220,13 +233,11 @@ class GenVariableStateNodeSet extends GenStateNodeSet {
 
 	/**
 	 * コンストラクタ
-	 * @param { Context } ctx 状態変数を扱っているコンテキスト
 	 * @param { CompPropTypes<typeof ForEach<T>> } props 
 	 * @param { (v: T, key?: unknown, genkey?: (typeof ForEach['propTypes']['key'])) => (GenStateNode | GenStateNodeSet)[] } gen
 	 */
-	constructor(ctx, props, gen) {
+	constructor(props, gen) {
 		super([]);
-		this.#ctx = ctx;
 		this.#props = props;
 		this.#gen = gen;
 	}
@@ -239,7 +250,7 @@ class GenVariableStateNodeSet extends GenStateNodeSet {
 	buildStateNodeSet(ctx) {
 		/** @type { { node: GenStateNode; ctx: Context }[] } */
 		const sibling = [];
-		const set = new VariableStateNodeSet(this.#ctx, sibling, this.#props, this.#gen);
+		const set = new VariableStateNodeSet(ctx, sibling, this.#props, this.#gen);
 		return { set, sibling };
 	}
 }
@@ -253,7 +264,7 @@ class GenVariableStateNodeSet extends GenStateNodeSet {
  * @returns 
  */
 function ForEach(ctx, props, children) {
-	return new GenVariableStateNodeSet(ctx, props, children);
+	return new GenVariableStateNodeSet(props, children);
 }
 /**
  * @template T
@@ -270,7 +281,9 @@ ForEach.propTypes = {
 	/** @type { KeyframeAnimationOptions | undefined } リスト要素が移動するときのオプションの定義 */
 	move: undefined,
 	/** @type { boolean } ノードの切り替え処理がキャンセル可能かの設定 */
-	cancellable: true
+	cancellable: true,
+	/** @type { boolean } 初期表示でonAfterSwitchingが実行されるか */
+	initSwitching: false
 };
 /** @type { true } */
 ForEach.early = true;

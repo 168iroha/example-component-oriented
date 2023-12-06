@@ -1,22 +1,32 @@
-import { State, StateNode, StatePlaceholderNode, StateNodeSet, GenStateNode, GenStateNodeSet, GenStateTextNode, GetGenStateNode, Context, watch } from "./core.js";
+import { StateNode, StatePlaceholderNode, StateNodeSet } from "./core.js";
 
 /**
- * @template T
- * @typedef { import("./core.js").CompPropTypes<T> } CompPropTypes コンポーネント上でのプロパティの型
+ * @typedef { () => Promise<unknown> | undefined | Generator<Promise<unknown> | undefined, Promise<unknown> | undefined> } SuspendGroupCallbackType SuspendGroupでキャプチャするコールバックの型
+ */
+
+/**
+ * @typedef { () => Generator<Promise<unknown> | undefined, Promise<unknown> | undefined> } SuspendGroupGeneratorFunctionType SuspendGroupでキャプチャするジェネレータ関数の型
  */
 
 /**
  * アニメーションの一時停止をグループ単位で実現するためのクラス
  */
 class SuspendGroup {
-	/** @type { GeneratorFunction } */
-	static #GeneratorFunction = Object.getPrototypeOf(function* () {}).constructor;
 	/** @type { [] | undefined } capture呼び出しの記憶 */
 	#inst = [];
 
 	/**
+	 * ジェネレータ関数であることの判定
+	 * @param { SuspendGroupCallbackType } f 
+	 * @returns { f is SuspendGroupGeneratorFunctionType }
+	 */
+	static #isGeneratorFunction(f) {
+		return f.constructor?.name === 'GeneratorFunction';
+	}
+
+	/**
 	 * 遅延評価を行うためにPromiseをキャプチャする
-	 * @param { () => Promise<unknown> | undefined | Generator<Promise<unknown> | undefined, Promise<unknown> | undefined> } callback キャプチャを実施する関数
+	 * @param { SuspendGroupCallbackType } callback キャプチャを実施する関数
 	 * @param { boolean } cancellable キャンセル可能かの設定
 	 */
 	async capture(callback, cancellable = true) {
@@ -35,9 +45,8 @@ class SuspendGroup {
 			this.#inst = undefined;
 		}
 
-		if (callback instanceof SuspendGroup.#GeneratorFunction) {
+		if (SuspendGroup.#isGeneratorFunction(callback)) {
 			// resolve呼び出しを捕捉する
-			/** @type { Generator<Promise<unknown> | undefined, Promise<unknown> | undefined> } */
 			const generator = callback();
 			while (true) {
 				// 他からcaptureが発生したかの判定
@@ -67,6 +76,13 @@ class SuspendGroup {
 			this.#inst = [];
 		}
 	}
+
+	/**
+	 * captureの呼び出しの補足情報をリセットする(キャンセル可なら次のチェック契機で終了、キャンセル不可なら後続のcaptureが実施可能となる)
+	 */
+	reset() {
+		this.#inst = [];
+	}
 }
 
 /**
@@ -80,7 +96,7 @@ class SwitchingPage {
 	/** @type { SuspendGroup } アニメーション制御のためのグループ */
 	#suspendGroup;
 	/** @type { StateNode | StateNodeSet | undefined } ページの切り替え対象 */
-	#node = undefined;
+	node = undefined;
 	/** @type { boolean } 現在のページが有効であるかを示すフラグ */
 	#enable = false;
 	/** @type { ((node : StateNode) => Promise | undefined) | undefined } ページ切り替え前に発火するイベント */
@@ -99,9 +115,11 @@ class SwitchingPage {
 	}
 
 	/**
-	 * 表示している要素の取得
+	 * 内部で用いるSuspendGroupの取得
 	 */
-	get node() { return this.#node; }
+	get suspendGroup() {
+		return this.#suspendGroup;
+	}
 
 	/**
 	 * ノードに対してイベントを適用して存在するならばPromiseを返す
@@ -157,16 +175,16 @@ class SwitchingPage {
 			}
 			// 要素を挿入する
 			this_.#enable = !(nextNode instanceof StatePlaceholderNode);
-			this_.#node = nextNode;
-			if (this_.#node instanceof StateNodeSet) {
-				this_.#node.insertBefore(afterNode, parentNode);
+			this_.node = nextNode;
+			if (this_.node instanceof StateNodeSet) {
+				this_.node.insertBefore(afterNode, parentNode);
 			}
 			else {
-				parentNode.insertBefore(this_.#node.element, afterNode);
+				parentNode.insertBefore(this_.node.element, afterNode);
 			}
 			// #nodeが有効な場合にafterSwitchingを発火
 			if (this_.#enable && afterSwitching) {
-				const promise = SwitchingPage.#callEvent(this_.#node, afterSwitching);
+				const promise = SwitchingPage.#callEvent(this_.node, afterSwitching);
 				if (promise) {
 					yield (this_.#currentPromise = promise).then(() => this_.#currentPromise = undefined);
 				}
@@ -190,16 +208,16 @@ class SwitchingPage {
 			// #nodeが有効な場合にbeforeSwitchingを発火
 			if (this_.#enable && beforeSwitching) {
 				this_.#enable = false;
-				const promise = SwitchingPage.#callEvent(this_.#node, beforeSwitching);
+				const promise = SwitchingPage.#callEvent(this_.node, beforeSwitching);
 				if (promise) {
 					yield (this_.#currentPromise = promise).then(() => this_.#currentPromise = undefined);
 				}
 			}
 
 			// 要素を削除する
-			this_.#node.remove();
+			this_.node.remove();
 			this_.#enable = false;
-			this_.#node = undefined;
+			this_.node = undefined;
 		}, cancellable);
 	}
 
@@ -211,7 +229,7 @@ class SwitchingPage {
 	switching(page, cancellable = true) {
 		// 画面の遷移先の構築を行うPromise/StateNode/StateNodeSetの作成
 		const promiseNextNode = page instanceof Function ? page() : page;
-		const afterNode = this.#node instanceof StateNodeSet ? this.#node.first.element : this.#node.element;
+		const afterNode = this.node instanceof StateNodeSet ? this.node.first.element : this.node.element;
 		const this_ = this;
 		const beforeSwitching = this.beforeSwitching;
 		const afterSwitching = this.afterSwitching;
@@ -224,7 +242,7 @@ class SwitchingPage {
 					yield promiseNextNode.then(v => nextNode = v);
 				}
 				this_.#enable = !(nextNode instanceof StatePlaceholderNode);
-				this_.#node = nextNode;
+				this_.node = nextNode;
 				return;
 			}
 			// 評価中のPromiseが存在すれば評価をしてから後続処理を実施
@@ -234,7 +252,7 @@ class SwitchingPage {
 			// #nodeが有効な場合にbeforeSwitchingを発火
 			if (this_.#enable && beforeSwitching) {
 				this_.#enable = false;
-				const promise = SwitchingPage.#callEvent(this_.#node, beforeSwitching);
+				const promise = SwitchingPage.#callEvent(this_.node, beforeSwitching);
 				if (promise) {
 					yield (this_.#currentPromise = promise).then(() => this_.#currentPromise = undefined);
 				}
@@ -250,7 +268,7 @@ class SwitchingPage {
 			const switchingNode = nextNode;
 			if (afterNode.parentElement) {
 				const parentNode = afterNode.parentElement;
-				if (switchingNode !== this_.#node) {
+				if (switchingNode !== this_.node) {
 					// ノードの挿入
 					if (switchingNode instanceof StateNodeSet) {
 						switchingNode.insertBefore(afterNode, parentNode);
@@ -259,18 +277,18 @@ class SwitchingPage {
 						parentNode.insertBefore(switchingNode.element, afterNode);
 					}
 					// ノードの削除
-					this_.#node.remove();
-					this_.#node = switchingNode;
+					this_.node.remove();
+					this_.node = switchingNode;
 				}
 			}
 			else {
 				// 親が存在しない場合はノードの設定のみを行い終了する
-				this_.#node = switchingNode;
+				this_.node = switchingNode;
 				return;
 			}
 			// #nodeが有効な場合にafterSwitchingを発火
 			if (this_.#enable && afterSwitching) {
-				const promise = SwitchingPage.#callEvent(this_.#node, afterSwitching);
+				const promise = SwitchingPage.#callEvent(this_.node, afterSwitching);
 				if (promise) {
 					yield (this_.#currentPromise = promise).then(() => this_.#currentPromise = undefined);
 				}

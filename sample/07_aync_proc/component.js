@@ -1,6 +1,7 @@
 import { Context } from "../../src/core.js";
 import { ForEach } from "../lib/ForEach.js";
-import { When } from "../lib/Choose.js";
+import { Choose, When } from "../lib/Choose.js";
+import { Suspense } from "../lib/Suspense.js";
 
 /**
  * リストについてのアニメーションを扱うコンポーネント
@@ -64,9 +65,7 @@ function ListAnimation(ctx) {
 					], { duration: 300, easing: 'ease-out' }).finished
 				},
 				move: { duration: 300, easing: 'ease-out' }
-			}, (item, key, genkey) => [
-				ctx.$('li', { onclick: () => stateList.value = stateList.value.filter(v => genkey(v) !== key) }, [item.val])
-			]),
+			}, item => [ctx.$('li', [item.val])]),
 		])
 	]);
 }
@@ -100,6 +99,61 @@ function WhenAnimation(ctx) {
 }
 
 /**
+ * 選択要素についてのアニメーションを扱うコンポーネント
+ * @param { Context } ctx
+ * @returns 
+ */
+function AsyncAnimation(ctx) {
+	// sleep関数
+	const sleep = t => new Promise(resolve => setTimeout(resolve, t));
+	// ページ番号
+	const pageNum = ctx.useState(0);
+	// ページを生成する関数(本来はちゃんとtextとmsをpropsとしたコンポーネントとして実装するべき)
+	const createPage = (text, ms) => async ctx => {
+		await sleep(ms);
+		return ctx.$('div', {  style: { color: 'white', 'background-color': 'black' }}, [text]);
+	}
+	// ロード中に表示する要素の定義
+	const loading = ctx.$('div', {
+		'display': 'flex',
+		'align-items': 'center',
+		'justify-content': 'center',
+		'width': '100%',
+		'height': '100%',
+		'color': 'white',
+		'background-color': 'rgba(0, 0, 0, 0.5)',
+	}, ['loading...']);
+
+	return ctx.$('div', [
+		ctx.$('h2', ['非同期要素の表示']),
+		ctx.$('nav', [
+			ctx.$('hr'),
+			ctx.$('button', { onclick: () => pageNum.value = 0 }, ['ページ1の表示']),
+			ctx.$('button', { onclick: () => pageNum.value = 1 }, ['ページ2の表示']),
+			ctx.$('button', { onclick: () => pageNum.value = 2 }, ['ページ3の表示']),
+			ctx.$('hr')
+		]),
+		ctx.$(Suspense, {
+			fallback: loading,
+			onAfterSwitching: node => node.element.animate?.([
+				{ opacity: '0.4' }, { opacity: '1' }
+			], { duration: 150, fill: 'forwards' }).finished,
+			onBeforeSwitching: node => node.element.animate?.([
+				{ opacity: '1' }, { opacity: '0.4' }
+			], { duration: 150, fill: 'forwards' }).finished
+		}, [
+			ctx.$('section', [
+				ctx.$(Choose, { target: pageNum, fallthrough: true }, [
+					ctx.$(When, { test: pageNum => pageNum === 0 }, () =>  [ctx.$(createPage('page1', 2000))]),
+					ctx.$(When, { test: pageNum => pageNum === 1 }, () =>  [ctx.$(createPage('page2', 1000))]),
+					ctx.$(When, { test: pageNum => pageNum === 2 }, () =>  [ctx.$(createPage('page3', 1000))])
+				])
+			])
+		])
+	]);
+}
+
+/**
  * メインとなるコンポーネント
  * @param { Context } ctx
  * @returns 
@@ -108,6 +162,7 @@ function Main(ctx) {
 	return ctx.$('div', [
 		ctx.$(ListAnimation),
 		ctx.$(WhenAnimation),
+		ctx.$(AsyncAnimation)
 	]);
 }
 
