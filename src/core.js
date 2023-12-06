@@ -549,6 +549,7 @@ class GenStateNode {
 	 */
 	getStateNode(callback) {
 		this.#deliverStateNodeCallback.push(callback);
+		return this;
 	}
 
 	/**
@@ -935,6 +936,8 @@ class StateNodeSet {
 class GenStateNodeSet {
 	/** @protected @type { (GenStateNode | GenStateNodeSet)[] } 管理しているネストを許容したノードの集合 */
 	nestedNodeSet;
+	/** @protected @type { ((node: StateNodeSet) => unknown)[] } buildCurrent時に同期的に生成したStateNodeを配信するためのコールバックのリスト */
+	#deliverStateNodeSetCallback = [];
 
 	/**
 	 * コンストラクタ
@@ -945,15 +948,37 @@ class GenStateNodeSet {
 	}
 
 	/**
+	 * buildStateNodeSet時にStateNodeSetを取得するためのコールバックの指定
+	 * @param { (node: StateNodeSet) => unknown } callback StateNodeを取得するためのコールバック
+	 */
+	getStateNodeSet(callback) {
+		this.#deliverStateNodeSetCallback.push(callback);
+		return this;
+	}
+
+	/**
+	 * 保持しているノードの取得と構築
+	 * @protected
+	 * @param { Context } ctx コンテキスト
+	 * @returns { { set: StateNodeSet; sibling: { node: GenStateNode; ctx: Context }[] } }
+	 */
+	buildStateNodeSetImpl(ctx) {
+		/** @type { { node: GenStateNode; ctx: Context }[] } */
+		const sibling = [];
+		const set = new StateNodeSet(ctx, this.nestedNodeSet, sibling);
+		return { set, sibling };
+	}
+
+	/**
 	 * 保持しているノードの取得と構築
 	 * @param { Context } ctx コンテキスト
 	 * @returns { { set: StateNodeSet; sibling: { node: GenStateNode; ctx: Context }[] } }
 	 */
 	buildStateNodeSet(ctx) {
-		/** @type { { node: GenStateNode; ctx: Context }[] } */
-		const sibling = [];
-		const set = new StateNodeSet(ctx, this.nestedNodeSet, sibling);
-		return { set, sibling };
+		const ret = this.buildStateNodeSetImpl(ctx);
+		this.#deliverStateNodeSetCallback.forEach(callback => callback(ret.set));
+		this.#deliverStateNodeSetCallback = [];
+		return ret;
 	}
 }
 
@@ -1608,15 +1633,13 @@ class StateComponent extends StateNode {
 			catch (e) {
 				// コンポーネントの要素の構築をキャンセルし、現在の要素としてはダミーを設置
 				// 復帰が可能でありかつ復帰を行う場合はthis.rebuildChild()などの各コンポーネントにより行う
-				result.gen = new GenStateTextNode(this.ctx, '');
-				result.gen.getStateNode(node => this.node = node);
+				result.gen = (new GenStateTextNode(this.ctx, '')).getStateNode(node => this.node = node);
 				result.children = [];
 				this.onErrorCaptured(e, this);
 			}
 		}
 		else {
-			result.gen = genStateNode;
-			result.gen.getStateNode(node => this.node = node);
+			result.gen = genStateNode.getStateNode(node => this.node = node);
 			result.children = [];
 		}
 

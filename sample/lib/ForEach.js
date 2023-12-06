@@ -244,10 +244,11 @@ class GenVariableStateNodeSet extends GenStateNodeSet {
 
 	/**
 	 * 保持しているノードの取得と構築
+	 * @protected
 	 * @param { Context } ctx コンテキスト
 	 * @returns { { set: VariableStateNodeSet; sibling: { node: GenStateNode; ctx: Context }[] } }
 	 */
-	buildStateNodeSet(ctx) {
+	buildStateNodeSetImpl(ctx) {
 		/** @type { { node: GenStateNode; ctx: Context }[] } */
 		const sibling = [];
 		const set = new VariableStateNodeSet(ctx, sibling, this.#props, this.#gen);

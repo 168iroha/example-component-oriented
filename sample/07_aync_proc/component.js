@@ -143,7 +143,7 @@ function AsyncAnimation(ctx) {
 			], { duration: 150, fill: 'forwards' }).finished
 		}, [
 			ctx.$('section', [
-				ctx.$(Choose, { target: pageNum, fallthrough: true }, [
+				ctx.$(Choose, { target: pageNum, fallthrough: true, cache: true }, [
 					ctx.$(When, { test: pageNum => pageNum === 0 }, () =>  [ctx.$(createPage('page1', 2000))]),
 					ctx.$(When, { test: pageNum => pageNum === 1 }, () =>  [ctx.$(createPage('page2', 1000))]),
 					ctx.$(When, { test: pageNum => pageNum === 2 }, () =>  [ctx.$(createPage('page3', 1000))])
