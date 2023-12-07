@@ -240,6 +240,8 @@ class WhenStateNodeSet extends StateNodeSet {
 			// DOMノードが構築されたことがある場合にのみ構築する
 			const element = this.first?.element;
 			if (element) {
+				// 遷移元のノードがキャッシュされているか
+				const cache = this.#prevChooseIndex >= 0 ? (nestedNodeSet[this.#prevChooseIndex].props.cache.value ?? this.#props.cache.value) : false;
 				// 表示するノードの選択
 				const genStateNodeSet = this.#chooseNode(ctx, next, nestedNodeSet, switchingPage);
 
@@ -271,11 +273,10 @@ class WhenStateNodeSet extends StateNodeSet {
 					}
 					// 全てのページ生成の解決後にキャプチャした非同期処理の解決をする
 					const fallthrough = (this.#prevChooseIndex >= 0 ? nestedNodeSet[this.#prevChooseIndex].props.fallthrough.value : undefined) ?? props.fallthrough.value;
-					if (fallthrough) {
-						ctx.capture(callback, cancellable);
-					}
-					else {
-						callback();
+					const node = switchingPage.node;
+					const promise = fallthrough ? ctx.capture(callback, cancellable) : callback();
+					if (!cache) {
+						promise.then(() => node.remove());
 					}
 					switchingPage.afterSwitching = props.onAfterSwitching.value;
 					switchingPage.beforeSwitching = props.onBeforeSwitching.value;

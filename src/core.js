@@ -505,13 +505,14 @@ class StateNode {
 	remove() {
 		this.callerList.forEach(caller => caller.states.forEach(s => s.delete(caller.caller)));
 		this.element?.remove();
+		this.element = undefined;
+		this.callerList = [];
 	}
 
 	/**
 	 * ノードの取り外し
 	 */
 	detach() {
-		this.callerList.forEach(caller => caller.states.forEach(s => s.delete(caller.caller)));
 		this.element?.remove();
 	}
 }
@@ -925,7 +926,7 @@ class StateNodeSet {
 	 */
 	detach() {
 		for (const node of this.nodeSet()) {
-			node?.element?.remove();
+			node.detach();
 		}
 	}
 }
@@ -1608,7 +1609,7 @@ class StateComponent extends StateNode {
 		}
 		catch (e) {
 			// 状態変数の関連付けを破棄してから例外をリスロー
-			this.detach();
+			this.remove();
 			throw e;
 		}
 
@@ -1867,7 +1868,7 @@ class StateAsyncComponent extends StateComponent {
 			}
 			catch (e) {
 				// 状態変数の関連付けを破棄してから例外をリスロー
-				super.detach();
+				super.remove();
 				throw e;
 			}
 

@@ -212,10 +212,10 @@ class SwitchingPage {
 	}
 
 	/**
-	 * ノードの削除
+	 * ノードの取り外し
 	 * @param { boolean } cancellable キャンセル可能かの設定
 	 */
-	remove(cancellable = true) {
+	detach(cancellable = true) {
 		const this_ = this;
 		const beforeSwitching = this.beforeSwitching;
 
@@ -233,8 +233,8 @@ class SwitchingPage {
 				}
 			}
 
-			// 要素を削除する
-			this_.node.remove();
+			// ノードの取り外し
+			this_.node.detach();
 			this_.#enable = false;
 			this_.node = undefined;
 		}, cancellable);
@@ -295,8 +295,8 @@ class SwitchingPage {
 					else {
 						parentNode.insertBefore(switchingNode.element, afterNode);
 					}
-					// ノードの削除
-					this_.node.remove();
+					// ノードの取り外し
+					this_.node.detach();
 					this_.node = switchingNode;
 				}
 			}
