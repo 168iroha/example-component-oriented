@@ -114,15 +114,15 @@ function AsyncAnimation(ctx) {
 		return ctx.$('div', {  style: { color: 'white', 'background-color': 'black' }}, [text]);
 	}
 	// ロード中に表示する要素の定義
-	const loading = ctx.$('div', {
+	const loading = ctx.$('div', { style: {
 		'display': 'flex',
 		'align-items': 'center',
 		'justify-content': 'center',
 		'width': '100%',
 		'height': '100%',
 		'color': 'white',
-		'background-color': 'rgba(0, 0, 0, 0.5)',
-	}, ['loading...']);
+		'background-color': 'rgba(0, 0, 0)',
+	}}, ['loading...']);
 
 	return ctx.$('div', [
 		ctx.$('h2', ['非同期要素の表示']),
@@ -137,10 +137,10 @@ function AsyncAnimation(ctx) {
 			fallback: loading,
 			onAfterSwitching: node => node.element.animate?.([
 				{ opacity: '0.4' }, { opacity: '1' }
-			], { duration: 150, fill: 'forwards' }).finished,
+			], { duration: 300, easing: 'ease-in', fill: 'forwards' }).finished,
 			onBeforeSwitching: node => node.element.animate?.([
 				{ opacity: '1' }, { opacity: '0.4' }
-			], { duration: 150, fill: 'forwards' }).finished
+			], { duration: 300, easing: 'ease-out', fill: 'forwards' }).finished
 		}, [
 			ctx.$('section', [
 				ctx.$(Choose, { target: pageNum, fallthrough: true, cache: true }, [
