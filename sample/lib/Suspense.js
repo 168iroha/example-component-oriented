@@ -212,10 +212,10 @@ class SwitchingPage {
 	}
 
 	/**
-	 * ノードの削除
+	 * ノードの取り外し
 	 * @param { boolean } cancellable キャンセル可能かの設定
 	 */
-	remove(cancellable = true) {
+	detach(cancellable = true) {
 		const this_ = this;
 		const beforeSwitching = this.beforeSwitching;
 
@@ -233,8 +233,8 @@ class SwitchingPage {
 				}
 			}
 
-			// 要素を削除する
-			this_.node.remove();
+			// ノードの取り外し
+			this_.node.detach();
 			this_.#enable = false;
 			this_.node = undefined;
 		}, cancellable);
@@ -295,8 +295,8 @@ class SwitchingPage {
 					else {
 						parentNode.insertBefore(switchingNode.element, afterNode);
 					}
-					// ノードの削除
-					this_.node.remove();
+					// ノードの取り外し
+					this_.node.detach();
 					this_.node = switchingNode;
 				}
 			}
@@ -448,7 +448,7 @@ class GenSuspenseStateNodeSet extends GenStateNodeSet {
 	 * 保持しているノードの取得と構築
 	 * @protected
 	 * @param { Context } ctx コンテキスト
-	 * @returns { { set: StateNodeSet; sibling: { node: GenStateNode; ctx: Context }[] } }
+	 * @returns { { set: StateNodeSet; ctx: Context; sibling: { node: GenStateNode; ctx: Context }[] } }
 	 */
 	buildStateNodeSetImpl(ctx) {
 		/** @type { { node: GenStateNode; ctx: Context }[] } */
@@ -470,7 +470,7 @@ class GenSuspenseStateNodeSet extends GenStateNodeSet {
 		});
 		this.nestedNodeSet[0].getStateNode(node => suspendGroup.page = node);
 		const set = new StateNodeSet(ctx2, this.nestedNodeSet, sibling);
-		return { set, sibling };
+		return { set, ctx: ctx2, sibling };
 	}
 }
 

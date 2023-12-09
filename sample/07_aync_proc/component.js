@@ -1,4 +1,4 @@
-import { Context } from "../../src/core.js";
+import { useState, Context } from "../../src/core.js";
 import { ForEach } from "../lib/ForEach.js";
 import { Choose, When } from "../lib/Choose.js";
 import { Suspense } from "../lib/Suspense.js";
@@ -10,13 +10,13 @@ import { Suspense } from "../lib/Suspense.js";
  */
 function ListAnimation(ctx) {
 	// リスト要素
-	const stateList = ctx.useState([
+	const stateList = useState(ctx, [
 		{ id: 0, val: 'item 1' },
 		{ id: 1, val: 'item 2' },
 		{ id: 2, val: 'item 3' },
 		{ id: 3, val: 'item 4' }
 	]);
-	const inputVal = ctx.useState('');
+	const inputVal = useState(ctx, '');
 	let nextID = stateList.value.length;
 
 	return ctx.$('div', [
@@ -77,7 +77,7 @@ function ListAnimation(ctx) {
  */
 function WhenAnimation(ctx) {
 	// カウンタ
-	const cnt = ctx.useState(0);
+	const cnt = useState(ctx, 0);
 
 	return ctx.$('div', [
 		ctx.$('h2', ['選択要素の表示']),
@@ -107,7 +107,7 @@ function AsyncAnimation(ctx) {
 	// sleep関数
 	const sleep = t => new Promise(resolve => setTimeout(resolve, t));
 	// ページ番号
-	const pageNum = ctx.useState(0);
+	const pageNum = useState(ctx, 0);
 	// ページを生成する関数(本来はちゃんとtextとmsをpropsとしたコンポーネントとして実装するべき)
 	const createPage = (text, ms) => async ctx => {
 		await sleep(ms);

@@ -1,4 +1,4 @@
-import { Context } from "../../src/core.js";
+import { useState, Context } from "../../src/core.js";
 import { ForEach } from "../lib/ForEach.js";
 
 /**
@@ -7,13 +7,13 @@ import { ForEach } from "../lib/ForEach.js";
  * @returns 
  */
 function Main(ctx) {
-	const stateList = ctx.useState([
+	const stateList = useState(ctx, [
 		{ id: 0, val: 'item 1' },
 		{ id: 1, val: 'item 2' },
 		{ id: 2, val: 'item 3' },
 		{ id: 3, val: 'item 4' }
 	]);
-	const inputVal = ctx.useState('');
+	const inputVal = useState(ctx, '');
 	let nextID = stateList.value.length;
 
 	return ctx.$('div', [
