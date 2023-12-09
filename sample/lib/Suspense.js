@@ -448,7 +448,7 @@ class GenSuspenseStateNodeSet extends GenStateNodeSet {
 	 * 保持しているノードの取得と構築
 	 * @protected
 	 * @param { Context } ctx コンテキスト
-	 * @returns { { set: StateNodeSet; sibling: { node: GenStateNode; ctx: Context }[] } }
+	 * @returns { { set: StateNodeSet; ctx: Context; sibling: { node: GenStateNode; ctx: Context }[] } }
 	 */
 	buildStateNodeSetImpl(ctx) {
 		/** @type { { node: GenStateNode; ctx: Context }[] } */
@@ -470,7 +470,7 @@ class GenSuspenseStateNodeSet extends GenStateNodeSet {
 		});
 		this.nestedNodeSet[0].getStateNode(node => suspendGroup.page = node);
 		const set = new StateNodeSet(ctx2, this.nestedNodeSet, sibling);
-		return { set, sibling };
+		return { set, ctx: ctx2, sibling };
 	}
 }
 

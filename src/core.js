@@ -473,6 +473,20 @@ class Computed extends IState {
  */
 
 /**
+ * @typedef {{
+ * 		ctx?: State<Context>;
+ * 		node?: State<StateNode>;
+ * }} ReferrablePropsInStateNode StateNodeで参照可能な要素
+ */
+
+/**
+ * @typedef {{
+ * 		ctx?: State<Context>;
+ * 		set?: State<StateNodeSet>;
+ * }} ReferrablePropsInStateNodeSet StateNodeSetで参照可能な要素
+ */
+
+/**
  * 状態を持ったノード
  */
 class StateNode {
@@ -505,7 +519,6 @@ class StateNode {
 	remove() {
 		this.callerList.forEach(caller => caller.states.forEach(s => s.delete(caller.caller)));
 		this.element?.remove();
-		this.element = undefined;
 		this.callerList = [];
 	}
 
@@ -525,6 +538,8 @@ class GenStateNode {
 	#ctx;
 	/** @protected @type { ((node: StateNode) => unknown)[] } buildCurrent時に同期的に生成したStateNodeを配信するためのコールバックのリスト */
 	#deliverStateNodeCallback = [];
+	/** @type { ReferrablePropsInStateNode | undefined } 参照する対象 */
+	#referrableStates = undefined;
 
 	/**
 	 * コンストラクタ
@@ -543,6 +558,15 @@ class GenStateNode {
 	 * atomicなGetStateNodeであるかの判定
 	 */
 	get isAtomic() { return false; }
+
+	/**
+	 * ノードの参照を行う
+	 * @param { ReferrablePropsInStateNode } props 観測する対象
+	 */
+	ref(props) {
+		this.#referrableStates = props;
+		return this;
+	}
 
 	/**
 	 * buildCurrent時にStateNodeを取得するためのコールバックの指定
@@ -578,6 +602,16 @@ class GenStateNode {
 		const ret = this.buildCurrentImpl(ctx, target);
 		this.#deliverStateNodeCallback.forEach(callback => callback(ret.node));
 		this.#deliverStateNodeCallback = [];
+		if (this.#referrableStates) {
+			// 参照の評価
+			if (this.#referrableStates.node) {
+				this.#referrableStates.node.value = ret.node;
+			}
+			if (this.#referrableStates.ctx) {
+				// コンポーネントなら保持しているコンテキストを渡す
+				this.#referrableStates.ctx.value = ret.node instanceof StateComponent ? ret.node.ctx : ctx;
+			}
+		}
 		return ret;
 	}
 
@@ -939,6 +973,8 @@ class GenStateNodeSet {
 	nestedNodeSet;
 	/** @protected @type { ((node: StateNodeSet) => unknown)[] } buildCurrent時に同期的に生成したStateNodeを配信するためのコールバックのリスト */
 	#deliverStateNodeSetCallback = [];
+	/** @type { ReferrablePropsInStateNodeSet | undefined } 参照する対象 */
+	#referrableStates = undefined;
 
 	/**
 	 * コンストラクタ
@@ -946,6 +982,15 @@ class GenStateNodeSet {
 	 */
 	constructor(nestedNodeSet) {
 		this.nestedNodeSet= nestedNodeSet;
+	}
+
+	/**
+	 * ノードの参照を行う
+	 * @param { ReferrablePropsInStateNodeSet } props 観測する対象
+	 */
+	ref(props) {
+		this.#referrableStates = props;
+		return this;
 	}
 
 	/**
@@ -961,24 +1006,33 @@ class GenStateNodeSet {
 	 * 保持しているノードの取得と構築
 	 * @protected
 	 * @param { Context } ctx コンテキスト
-	 * @returns { { set: StateNodeSet; sibling: { node: GenStateNode; ctx: Context }[] } }
+	 * @returns { { set: StateNodeSet; ctx: Context; sibling: { node: GenStateNode; ctx: Context }[] } }
 	 */
 	buildStateNodeSetImpl(ctx) {
 		/** @type { { node: GenStateNode; ctx: Context }[] } */
 		const sibling = [];
 		const set = new StateNodeSet(ctx, this.nestedNodeSet, sibling);
-		return { set, sibling };
+		return { set, ctx, sibling };
 	}
 
 	/**
 	 * 保持しているノードの取得と構築
 	 * @param { Context } ctx コンテキスト
-	 * @returns { { set: StateNodeSet; sibling: { node: GenStateNode; ctx: Context }[] } }
+	 * @returns { { set: StateNodeSet; ctx: Context; sibling: { node: GenStateNode; ctx: Context }[] } }
 	 */
 	buildStateNodeSet(ctx) {
 		const ret = this.buildStateNodeSetImpl(ctx);
 		this.#deliverStateNodeSetCallback.forEach(callback => callback(ret.set));
 		this.#deliverStateNodeSetCallback = [];
+		if (this.#referrableStates) {
+			// 参照の評価
+			if (this.#referrableStates.set) {
+				this.#referrableStates.set.value = ret.set;
+			}
+			if (this.#referrableStates.ctx) {
+				this.#referrableStates.ctx.value = ret.ctx;
+			}
+		}
 		return ret;
 	}
 }
@@ -1003,7 +1057,7 @@ class StateTextNode extends StateNode {
 
 	/**
 	 * DOMノードの取得
-	 * @returns { Text }
+	 * @returns { Text | undefined }
 	 */
 	get element() { return this.#element; }
 
@@ -1012,7 +1066,7 @@ class StateTextNode extends StateNode {
 	 */
 	remove() {
 		super.remove();
-		this.#element.remove();
+		this.#element = undefined;
 	}
 }
 
@@ -1088,7 +1142,7 @@ class StatePlaceholderNode extends StateNode {
 
 	/**
 	 * DOMノードの取得
-	 * @returns { Text }
+	 * @returns { Text | undefined }
 	 */
 	get element() { return this.#element; }
 
@@ -1097,7 +1151,7 @@ class StatePlaceholderNode extends StateNode {
 	 */
 	remove() {
 		super.remove();
-		this.#element.remove();
+		this.#element = undefined;
 	}
 }
 
@@ -1159,7 +1213,7 @@ class StateHTMLElement extends StateNode {
 
 	/**
 	 * DOMノードの取得
-	 * @returns { HTMLElement }
+	 * @returns { HTMLElement | undefined }
 	 */
 	get element() { return this.#element; }
 
@@ -1168,7 +1222,7 @@ class StateHTMLElement extends StateNode {
 	 */
 	remove() {
 		super.remove();
-		this.#element.remove();
+		this.#element = undefined;
 	}
 }
 
@@ -1260,7 +1314,7 @@ class StateDomNode extends StateNode {
 
 	/**
 	 * DOMノードの取得
-	 * @returns { HTMLElement }
+	 * @returns { HTMLElement | undefined }
 	 */
 	get element() { return this.#element; }
 
@@ -1269,7 +1323,7 @@ class StateDomNode extends StateNode {
 	 */
 	remove() {
 		super.remove();
-		this.#element.remove();
+		this.#element = undefined;
 	}
 }
 

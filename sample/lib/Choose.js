@@ -163,13 +163,13 @@ class GenShowStateNodeSet extends GenStateNodeSet {
 	 * 保持しているノードの取得と構築
 	 * @protected
 	 * @param { Context } ctx コンテキスト
-	 * @returns { { set: ShowStateNodeSet<T>; sibling: { node: GenStateNode; ctx: Context }[] } }
+	 * @returns { { set: StateNodeSet; ctx: Context; sibling: { node: GenStateNode; ctx: Context }[] } }
 	 */
 	buildStateNodeSetImpl(ctx) {
 		/** @type { { node: GenStateNode; ctx: Context }[] } */
 		const sibling = [];
 		const set = new ShowStateNodeSet(ctx, sibling, this.#props, this.#gen);
-		return { set, sibling };
+		return { set, ctx, sibling };
 	}
 }
 
@@ -415,7 +415,7 @@ class GenWhenStateNodeSet extends GenStateNodeSet {
 		/** @type { { node: GenStateNode; ctx: Context }[] } */
 		const sibling = [];
 		const set = new WhenStateNodeSet(ctx, sibling, this.#props, this.nestedNodeSet);
-		return { set, sibling };
+		return { set, ctx, sibling };
 	}
 }
 
