@@ -1,4 +1,4 @@
-import { GenStateNode, Context } from "../../src/core.js";
+import { useState, GenStateNode, Context } from "../../src/core.js";
 import { Choose, When } from "../lib/Choose.js";
 
 /**
@@ -32,8 +32,8 @@ CountButton.propTypes = {
  * @returns 
  */
 function DualInput(ctx) {
-	const input1 = ctx.useState('');
-	const input2 = ctx.useState('');
+	const input1 = useState(ctx, '');
+	const input2 = useState(ctx, '');
 
 	return {
 		// ノードの定義
@@ -56,8 +56,8 @@ function DualInput(ctx) {
  */
 function Main(ctx, props) {
 	// カウンタの初期値のため状態変数ではなく現時点の値として受け取る
-	const cnt = ctx.useState(props.init.value);
-	const input = ctx.useState('');
+	const cnt = useState(ctx, props.init.value);
+	const input = useState(ctx, '');
 
 	return ctx.$('div', [
 		ctx.$(CountButton, { onclick: () => ++cnt.value }, [

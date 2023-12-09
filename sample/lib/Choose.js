@@ -29,7 +29,7 @@ class ShowStateNodeSet extends StateNodeSet {
 		const switchingPage = new SwitchingPage(suspendGroup);
 
 		// 表示対象の更新時にその捕捉を行う
-		const caller = watch(props.target, (prev, next) => {
+		const caller = watch(ctx, props.target, (prev, next) => {
 			// DOMノードが構築されたことがあるかつ状態変数が有効な場合にのみ構築する
 			const element = this.first?.element;
 			if (element && next !== undefined) {
@@ -39,6 +39,8 @@ class ShowStateNodeSet extends StateNodeSet {
 				const cache = props.cache.value ?? false;
 				const genStateNodeSet = (cache ? this.#cache : undefined) ?? new GenStateNodeSet(ctx.normalizeCtxChild(flag ? gen(next) : [new GenStatePlaceholderNode(ctx)]));
 				let callback = undefined;
+				ctx.component?.onBeforeUpdate?.();
+				let promise = undefined;
 				if (genStateNodeSet instanceof GenStateNodeSet) {
 					// 表示する要素が存在しないときは代わりにplaceholderを設置
 					const { set, sibling } = genStateNodeSet.buildStateNodeSet();
@@ -67,11 +69,12 @@ class ShowStateNodeSet extends StateNodeSet {
 				}
 				// 全てのページ生成の解決後にキャプチャした非同期処理の解決をする
 				if (props.fallthrough.value ?? false) {
-					ctx.capture(callback, cancellable);
+					promise = ctx.capture(callback, cancellable);
 				}
 				else {
-					callback();
+					promise = callback();
 				}
+				promise.then(() => ctx.component?.onAfterUpdate?.());
 			}
 		});
 		if (caller) {
@@ -97,7 +100,7 @@ class ShowStateNodeSet extends StateNodeSet {
 				this.#cache = set;
 			}
 
-			ctx.updateState([{ caller: () => {
+			ctx.state.update([{ caller: () => {
 				const parent = this.first.element.parentElement;
 				const afterElement = this.last.element.nextElementSibling;
 				const set = this.nestedNodeSet[0];
@@ -111,7 +114,7 @@ class ShowStateNodeSet extends StateNodeSet {
 					switchingPage.insertBefore(page, afterElement, parent, props.cancellable.value ?? true);
 				}
 				switchingPage.afterSwitching = props.onAfterSwitching.value;
-			}}]);
+			}, label: ctx.component?.componentLabel }]);
 		}
 	}
 
@@ -236,7 +239,7 @@ class WhenStateNodeSet extends StateNodeSet {
 		const switchingPage = new SwitchingPage(suspendGroup);
 
 		// 表示対象の更新時にその捕捉を行う
-		const caller = watch(this.#props.target, (prev, next) => {
+		const caller = watch(ctx, this.#props.target, (prev, next) => {
 			// DOMノードが構築されたことがある場合にのみ構築する
 			const element = this.first?.element;
 			if (element) {
@@ -249,6 +252,7 @@ class WhenStateNodeSet extends StateNodeSet {
 				if (genStateNodeSet) {
 					const cancellable = (this.#prevChooseIndex >= 0 ? nestedNodeSet[this.#prevChooseIndex].props.cancellable.value : undefined) ?? props.cancellable.value;
 					let callback = undefined;
+					ctx.component?.onBeforeUpdate?.();
 					if (genStateNodeSet instanceof GenStateNodeSet) {
 						// ノードを構築
 						const { set, sibling } = genStateNodeSet.buildStateNodeSet(ctx);
@@ -274,7 +278,7 @@ class WhenStateNodeSet extends StateNodeSet {
 					// 全てのページ生成の解決後にキャプチャした非同期処理の解決をする
 					const fallthrough = (this.#prevChooseIndex >= 0 ? nestedNodeSet[this.#prevChooseIndex].props.fallthrough.value : undefined) ?? props.fallthrough.value;
 					const node = switchingPage.node;
-					const promise = fallthrough ? ctx.capture(callback, cancellable) : callback();
+					const promise = (fallthrough ? ctx.capture(callback, cancellable) : callback()).then(() => ctx.component?.onAfterUpdate?.());
 					if (!cache) {
 						promise.then(() => node.remove());
 					}
@@ -300,7 +304,7 @@ class WhenStateNodeSet extends StateNodeSet {
 		this.nestedNodeSet = [set];
 		sibling.push(...sibling_);
 
-		ctx.updateState([{ caller: () => {
+		ctx.state.update([{ caller: () => {
 			const parent = this.first.element.parentElement;
 			const afterElement = this.last.element.nextElementSibling;
 			const set = this.nestedNodeSet[0];
@@ -318,7 +322,7 @@ class WhenStateNodeSet extends StateNodeSet {
 			}
 			switchingPage.afterSwitching = props.onAfterSwitching.value;
 			switchingPage.beforeSwitching = props.onBeforeSwitching.value;
-		}}]);
+		}, label: ctx.component?.componentLabel }]);
 	}
 
 	/**

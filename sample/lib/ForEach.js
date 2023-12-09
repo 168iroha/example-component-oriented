@@ -39,7 +39,7 @@ class VariableStateNodeSet extends StateNodeSet {
 		this.#props = props;
 
 		// 表示対象の更新時にその捕捉を行う
-		const caller = watch(props.target, (prev, next) => {
+		const caller = watch(ctx, props.target, (prev, next) => {
 			// DOMノードが構築されている場合にのみ構築する(this.first.element自体はplaceholderにより(外部から操作しない限り)存在が保証される)
 			const element = this.first?.element;
 			if (element && !(prev.length === 0 && next.length === 0)) {
@@ -100,6 +100,8 @@ class VariableStateNodeSet extends StateNodeSet {
 
 				// 親が有効ならばノードの付け替えを実施する
 				if (element.parentElement) {
+					ctx.component?.onBeforeUpdate?.();
+					const promiseList = [];
 					if (props.move.value && this.first.element.nodeType === Node.ELEMENT_NODE && element.nodeType === Node.ELEMENT_NODE) {
 						// FLIPによるアニメーションの実施
 						/** @type { HTMLElement[] } */
@@ -111,7 +113,7 @@ class VariableStateNodeSet extends StateNodeSet {
 						}
 						// First
 						const firstStateList = elementList.map(e => e.getBoundingClientRect());
-						this.#setupNodeList(element, endNode, deleteNodeSet);
+						promiseList.push(...this.#setupNodeList(element, endNode, deleteNodeSet));
 						// Last
 						const lastStateList = elementList.map(e => e.getBoundingClientRect());
 						// Invert&Play
@@ -119,16 +121,17 @@ class VariableStateNodeSet extends StateNodeSet {
 							const moveX = firstStateList[idx].left - lastStateList[idx].left;
 							const moveY = firstStateList[idx].top - lastStateList[idx].top;
 							if (moveX !== 0 || moveY !== 0) {
-								e.animate([
+								promiseList.push(e.animate([
 									{ transform: `translate(${moveX}px, ${moveY}px)` },
 									{ transform: 'translate(0, 0)' }
-								], props.move.value);
+								], props.move.value).finished);
 							}
 						});
 					}
 					else {
-						this.#setupNodeList(element, endNode, deleteNodeSet);
+						promiseList.push(...this.#setupNodeList(element, endNode, deleteNodeSet));
 					}
+					Promise.all(promiseList).then(() => ctx.component?.onAfterUpdate?.());
 				}
 			}
 		});
@@ -157,7 +160,7 @@ class VariableStateNodeSet extends StateNodeSet {
 			sibling.push(...sibling_);
 		}
 
-		ctx.updateState([{ caller: () => {
+		ctx.state.update([{ caller: () => {
 			// ノードの切り替え
 			const cancellable = props.cancellable.value;
 			for (const { set, switching } of this.#keyList.values()) {
@@ -167,7 +170,7 @@ class VariableStateNodeSet extends StateNodeSet {
 				switching.insertBefore(set, afterElement, parent, cancellable);
 				switching.afterSwitching = props.onAfterSwitching.value;
 			}
-		}}]);
+		}, label: ctx.component?.componentLabel }]);
 	}
 
 	/**
@@ -181,6 +184,7 @@ class VariableStateNodeSet extends StateNodeSet {
 		/** @type { StateNodeSet[] } */
 		const nodeSetList = [];
 		const cancellable = this.#props.cancellable.value ?? true;
+		const promiseList = [];
 		// 残存するノードの並べ替え
 		for (const { set, switching } of this.#keyList.values()) {
 			if (switching.node) {
@@ -193,7 +197,7 @@ class VariableStateNodeSet extends StateNodeSet {
 			if (!switching.node) {
 				/** @type { HTMLElement | Text | undefined } */
 				const _afterElement = index >= nodeSetList.length ? afterElement : nodeSetList[index].first.element;
-				switching.insertBefore(set, _afterElement, parent, cancellable);
+				promiseList.push(switching.insertBefore(set, _afterElement, parent, cancellable));
 				nodeSetList.push(set);
 			}
 		}
@@ -205,12 +209,13 @@ class VariableStateNodeSet extends StateNodeSet {
 		// ノードの削除
 		for (const { switching } of deleteNodeSet) {
 			const node = switching.node;
-			switching.detach(cancellable).then(() => node.remove());
+			promiseList.push(switching.detach(cancellable).then(() => node.remove()));
 		}
 		// 要素が存在しないときはplaceholderを設置
 		if (nodeSetList.length === 0) {
 			this.nestedNodeSet[0].insertBefore(endNode, parent);
 		}
+		return promiseList;
 	}
 
 	/**
