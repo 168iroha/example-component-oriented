@@ -1557,14 +1557,7 @@ class GenStateDomNode extends GenStateNode {
 		//
 		{
 			setReferenceToObserver(setter => {
-				const resizeObserver = new ResizeObserver(entries => {
-					// entriesが複数存在することも加味して状態変数の変化の伝播を遅延する
-					ctx.state.lazy(() => {
-						for (const entry of entries) {
-							setter(element);
-						}
-					})();
-				});
+				const resizeObserver = new ResizeObserver(entries => setter(element));
 				resizeObserver.observe(element);
 			}, props, ['clientHeigth', 'clientWidth']);
 		}
