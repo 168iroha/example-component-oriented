@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta charset="utf-8">
+		<script type="module">
+			import { StateContext, useState, useComputed, watch } from "../../src/core.js";
+
+			// 基本的な状態変数の利用方法
+			function f1(ctx) {
+				const state1 = useState(ctx, 0);
+				const state2 = useState(ctx, 0);
+				// 初回およびstate1およびstate2が変更されたときに呼びだされる関数
+				ctx.call({ caller: () => {
+					console.log(`[f1] state1 = ${state1.value}`);
+					console.log(`[f1] state2 = ${state2.value}`);
+				}});
+				++state1.value;
+				++state2.value;
+			}
+
+			// labelを利用した状態変数の更新
+			function f2(ctx) {
+				// 状態変数の更新規則を示すラベル
+				const label = {
+					/** 蓄積した更新(蓄積は関数単位で行われるためSet等を用いてuniqueにするべき) */
+					arr: new Set(),
+
+					/**
+					 * 状態の更新の蓄積を行う(ctx.callで自動で呼び出される)
+					 */
+					update(caller) { console.log(`[f2] call Label.update`); this.arr.add(caller); },
+
+					/**
+					 * 蓄積した更新を処理する(任意の契機で手動で呼び出す)
+					 */
+					proc() { console.log(`[f2] call Label.proc`); this.arr.forEach(e => e()); this.arr = new Set(); }
+				}
+
+				const state1 = useState(ctx, 0);
+				const state2 = useState(ctx, 0);
+				// 初回およびstate1およびstate2が変更されたときに呼びだされる関数
+				ctx.call({ caller: () => {
+					console.log(`[f2] state1 = ${state1.value}`);
+					console.log(`[f2] state2 = ${state2.value}`);
+				}, label});
+				++state1.value;
+				++state2.value;
+
+				// labelで状態変数を更新する
+				label.proc();
+			}
+
+			// 状態変数の変更の監視
+			function f3(ctx) {
+				const state = useState(ctx, 0);
+				// stateが変更されたときに呼びだされる関数
+				watch(ctx, state, () => {
+					console.log(`[f3] state = ${state.value}`);
+				});
+				++state.value;
+				++state.value;
+			}
+
+			// 状態変数の観測
+			function f4(ctx) {
+				const state1 = useState(ctx, 0);
+				// state1の値が同期される状態変数の構築
+				const state2 = useState(ctx, 1);
+				const state3 = useState(ctx, 2);
+				const state4 = useState(ctx, 3);
+
+				// 任意の順番で状態変数の観測の記述を行う
+				state1.onreference = state => {
+					console.log(`[f4] call state1.onreference(state = ${state.value})`);
+				};
+				state2.observe(state1);
+				state3.observe(state1);
+				state4.observe(state2);
+				// state3が状態変数の変更を適用する意味で利用されたタイミングでstate1.onreferenceが発火する
+				ctx.call({ caller: () => {
+					console.log(`[f4] use state3`);
+					console.log(`[f4] state3 = ${state3.value}`);
+				}});
+				console.log(`[f4] state1.onreference = ${state1.onreference}`);
+			}
+
+			// コンテキストの宣言
+			const ctx = new StateContext();
+			// 各種状態変数の振る舞いを実行
+			f1(ctx);
+			f2(ctx);
+			f3(ctx);
+			f4(ctx);
+		</script>
+	</head>
+	<body>
+		<div id="app">ディベロッパーツールなどを開いてconsole.log()の出力結果を確認</div>
+	</body>
+</html>

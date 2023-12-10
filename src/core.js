@@ -17,7 +17,7 @@ class ICallerLabel {
 	update(caller) { throw new Error('not implemented.'); }
 
 	/**
-	 * 蓄積した状態を処理する
+	 * 蓄積した更新を処理する
 	 */
 	proc() { throw new Error('not implemented.'); }
 }
@@ -52,7 +52,7 @@ class DomUpdateLabel {
 	}
 
 	/**
-	 * 蓄積した状態を処理する
+	 * 蓄積した更新を処理する
 	 */
 	proc() {
 		if (this.#component.element) {
@@ -127,7 +127,7 @@ class ComponentLabel {
 	}
 
 	/**
-	 * 蓄積した状態を処理する
+	 * 蓄積した更新を処理する
 	 */
 	proc() {}
 }
@@ -148,6 +148,14 @@ class IState {
 	 * @returns { { state: IState<T>; caller?: { caller: CallerType; states: State<unknown>[] }} } 呼び出し元情報
 	 */
 	unidirectional(ctx) { throw new Error('not implemented.'); }
+
+	/**
+
+	* thisを観測するデータの作成
+	 * @param { StateContext } ctx 生成するデータが属するコンテキスト
+	 * @returns { { state: IState<T>; caller?: { caller: CallerType; states: State<unknown>[] }} } 呼び出し元情報
+	 */
+	observe(prop) { throw new Error('not implemented.'); }
 
 	/**
 	 * 状態変数が属するコンテキストの取得
@@ -187,6 +195,15 @@ class NotState extends IState {
 	unidirectional(ctx) {
 		return { state: this };
 	}
+
+	/**
+	 * thisを観測するデータの作成
+	 * @param { StateContext } ctx 生成するデータが属するコンテキスト
+	 * @returns { { state: IState<T>; caller?: { caller: CallerType; states: State<unknown>[] }} } 呼び出し元情報
+	 */
+	observe(prop) {
+		return { state: this };
+	}
 }
 
 /**
@@ -217,9 +234,10 @@ class State extends IState {
 
 	get value() {
 		// 呼び出し元が有効なら追加する
-		if (this.#ctx.current && !this.#callerList.has(this.#ctx.current.caller)) {
+		const current = this.#ctx.current;
+		if (current && !this.#callerList.has(current.caller)) {
 			this.#ctx.notify(this);
-			this.#callerList.add(this.#ctx.current.caller);
+			this.#callerList.add(current.caller);
 		}
 		return this.#value;
 	}
@@ -299,16 +317,30 @@ class State extends IState {
 	}
 
 	/**
+	 * thisを観測するデータの作成
+	 * @overload
+	 * @param { StateContext } prop 生成するデータが属するコンテキスト
+	 * @returns { { state: IState<T>; caller?: { caller: CallerType; states: State<unknown>[] }} } 呼び出し元情報
+	 */
+	/**
 	 * propの観測(onreferenceの連鎖的な追跡も実施する)
+	 * @overload
 	 * @param { CtxValueType<T> | () => T } prop 観測対象の変数
+	 * @returns { { caller: CallerType; states: State<unknown>[] } | undefined } 呼び出し元情報
+	 */
+	/**
+	 * propの観測(onreferenceの連鎖的な追跡も実施する)/thisを観測するデータの作成
+	 * @param { CtxValueType<T> | (() => T) | StateContext } prop 観測対象の変数/生成するデータが属するコンテキスト
 	 */
 	observe(prop) {
+		if (prop instanceof StateContext) {
+			/** @type { State<T> } */
+			const state = new State(prop, undefined);
+			return { state, caller: state.observe(this) };
+		}
 		if (prop instanceof State || prop instanceof Computed || prop instanceof Function) {
-			// onreferenceが発火しないように退避
-			const temp = this.#onreference;
-			this.#onreference = undefined;
-			const caller = this.ctx.unidirectional(prop, this);
-			this.#onreference = temp;
+			// onreferenceが発火しないように無効化
+			const caller = this.ctx.noreference(() => this.ctx.unidirectional(prop, this));
 			// state.onreferenceなしでstateが1つ以上の参照をもつ(親への状態の伝播なしで状態の参照が存在する場合)
 			// もしくはstate.onreferenceなしでstateが2つ以上の参照をもつ(親への状態の伝播ありで状態の参照が存在する場合)
 			// もしくはonreference()の戻り値がtrue(親への状態の伝播ありで祖先で状態の参照が存在する場合)
@@ -347,6 +379,8 @@ class State extends IState {
 					state.#onreference = true;
 				});
 			}
+
+			return caller;
 		}
 		else if (prop instanceof IState) {
 			this.value = prop.value;
@@ -387,6 +421,17 @@ class Computed extends IState {
 	unidirectional(ctx) {
 		const dest = new State(ctx, undefined);
 		return { state: dest, caller: this.ctx.unidirectional(this, dest) };
+	}
+
+	/**
+	 * thisを観測するデータの作成
+	 * @param { StateContext } ctx 生成するデータが属するコンテキスト
+	 * @returns { { state: IState<T>; caller?: { caller: CallerType; states: State<unknown>[] }} } 呼び出し元情報
+	 */
+	observe(prop) {
+		/** @type { State<T> } */
+		const state = new State(prop, undefined);
+		return { state, caller: state.observe(this) };
 	}
 
 	/**
@@ -1512,14 +1557,7 @@ class GenStateDomNode extends GenStateNode {
 		//
 		{
 			setReferenceToObserver(setter => {
-				const resizeObserver = new ResizeObserver(entries => {
-					// entriesが複数存在することも加味して状態変数の変化の伝播を遅延する
-					ctx.state.lazy(() => {
-						for (const entry of entries) {
-							setter(element);
-						}
-					})();
-				});
+				const resizeObserver = new ResizeObserver(entries => setter(element));
 				resizeObserver.observe(element);
 			}, props, ['clientHeigth', 'clientWidth']);
 		}
@@ -1760,9 +1798,9 @@ class GenStateComponent extends GenStateNode {
 
 		/** @type { CompPropTypes<K> } コンポーネントに渡すプロパティ */
 		const compProps = {};
-		// プロパティは単方向データに変換して渡すようにする
+		// プロパティは観測を行うような単方向データに変換して渡すようにする
 		for (const key in this.props) {
-			const { state, caller } = this.props[key].unidirectional(ctx.state);
+			const { state, caller } = this.props[key].observe(ctx.state);
 			if (caller && caller.states.length > 0) callerList.push(caller);
 			compProps[key] = state;
 		}
@@ -2022,6 +2060,9 @@ class SuspenseContext {
 		this.#stack = localSuspenseCtx ? [localSuspenseCtx] : [];
 	}
 
+	/**
+	 * ローカルコンテキストの取得
+	 */
 	get current() { return this.#stack.length === 0 ? undefined : this.#stack[this.#stack.length - 1]; }
 
 	/**
@@ -2067,7 +2108,12 @@ class StateContext {
 	#stack = [];
 	/** @type { Map<CallerType['label'], Set<CallerType['caller']>>[] } 遅延評価対象の呼び出し元の集合についてのスタック */
 	#lazyUpdateStack = [];
+	/** @type { boolean } onreferenceを発火するかのフラグ */
+	#noreference = [false];
 
+	/**
+	 * 現在実行中の関数の情報を取得する
+	 */
 	get current() { return this.#stack.length === 0 ? undefined : this.#stack[this.#stack.length - 1]; }
 
 	/**
@@ -2165,12 +2211,24 @@ class StateContext {
 	 */
 	notify(state) {
 		if (this.#stack.length > 0) {
-			if (state.onreference instanceof Function) {
+			if (!this.#noreference[0] && (state.onreference instanceof Function)) {
 				// 参照追加に関するイベントの発火
 				state.onreference(state);
 			}
 			this.#stack[this.#stack.length - 1].states.push(state);
 		}
+	}
+
+	/**
+	 * 一時的に参照なしで関数を実行する
+	 * @template R
+	 * @param { () => R } callback 参照なしの状態で実行する関数
+	 */
+	noreference(callback) {
+		this.#noreference[0] = true;
+		const ret = callback();
+		this.#noreference[0] = false;
+		return ret;
 	}
 
 	/**
@@ -2586,23 +2644,23 @@ function setParam(val, setter, label = undefined) {
 /**
  * 状態変数の宣言
  * @template T
- * @param { Context } ctx 状態変数が属するコンテキスト
+ * @param { Context | StateContext } ctx 状態変数が属するコンテキスト
  * @param { T } value 状態変数の初期値
  * @returns { State<T> }
  */
 function useState(ctx, value) {
-	return new State(ctx.state, value);
+	return new State(ctx instanceof Context ? ctx.state : ctx, value);
 }
 
 /**
  * 算出プロパティの宣言
  * @template T
- * @param { Context } ctx 状態変数が属するコンテキスト
+ * @param { Context | StateContext } ctx 状態変数が属するコンテキスト
  * @param { () => T } f 算出プロパティを計算する関数
  * @returns { Computed<T> }
  */
 function useComputed(ctx, f) {
-	return new Computed(ctx.state, f);
+	return new Computed(ctx instanceof Context ? ctx.state : ctx, f);
 }
 
 /**
@@ -2624,13 +2682,13 @@ function useComputed(ctx, f) {
 /**
  * ウォッチャーの宣言
  * @template T
- * @param { Context } ctx ウォッチを行うコンテキスト
+ * @param { Context | StateContext } ctx ウォッチを行うコンテキスト
  * @param { IState<unknown>[] | IState<T> } state 監視を行う状態変数
  * @param { (() => unknown) | ((prev: T, next: T) => unknown) } f ウォッチャー
  * @returns { CallerType | undefined }
  */
 function watch(ctx, state, f) {
-	const component = ctx.component;
+	const label = ctx instanceof Context ?  ctx.component?.componentLabel : undefined;
 
 	if (state instanceof IState) {
 		let prevState =  state.value;
@@ -2643,13 +2701,13 @@ function watch(ctx, state, f) {
 			prevState = nextState;
 			nextState = state.value;
 			return f(prevState, nextState);
-		}, label: component?.componentLabel };
+		}, label };
 		state.add(caller);
 		return caller;
 	}
 	else {
 		/** @type { CallerType } */
-		const caller = { caller: f, label: component?.componentLabel };
+		const caller = { caller: f, label };
 		state.forEach(s => s.add(caller));
 		return caller;
 	}
@@ -2696,6 +2754,7 @@ export {
 	GenStateComponent,
 	ILocalSuspenseContext,
 	SuspenseContext,
+	StateContext,
 	Context,
 	useState,
 	useComputed,
