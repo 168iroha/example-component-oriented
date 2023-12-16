@@ -1,7 +1,7 @@
 /**
  * @typedef {{
  * 		label?: ICallerLabel | undefined;
- * 		caller: Function;
+ * 		caller: ()=> unknown;
  * }} CallerType 状態変数における呼び出し元についての型
  */
 
@@ -12,7 +12,7 @@
 class ICallerLabel {
 	/**
 	 * 状態の更新の蓄積を行う
-	 * @param { Function } caller 状態の参照先
+	 * @param { CallerType['caller'] } caller 状態の参照先
 	 */
 	update(caller) { throw new Error('not implemented.'); }
 
@@ -30,7 +30,7 @@ class ICallerLabel {
 class DomUpdateLabel {
 	/** @type { StateComponent<K> } 更新対象となるコンポーネント */
 	#component;
-	/** @type { Set<Function> } DOM更新のためのcallerの集合 */
+	/** @type { Set<CallerType['caller']> } DOM更新のためのcallerの集合 */
 	#domUpdateTaskSet = new Set();
 
 	/**
@@ -43,7 +43,7 @@ class DomUpdateLabel {
 
 	/**
 	 * 状態の更新の蓄積を行う
-	 * @param { Function } caller 状態の参照先
+	 * @param { CallerType['caller'] } caller 状態の参照先
 	 */
 	update(caller) {
 		// Context経由でDomUpdateControllerのメソッドを呼び出す
@@ -55,17 +55,16 @@ class DomUpdateLabel {
 	 * 蓄積した更新を処理する
 	 */
 	proc() {
-		if (this.#component.element) {
-			const taskSet = this.#domUpdateTaskSet;
-			this.#domUpdateTaskSet = new Set();
+		const taskSet = this.#domUpdateTaskSet;
+		this.#domUpdateTaskSet = new Set();
 
-			// DOM更新の前後でupdateライフサイクルフックを発火しつつタスクを実行する
-			this.#component.onBeforeUpdate();
-			for (const task of taskSet) {
-				createWrapperFunction(task, this.#component)();
-			}
-			this.#component.onAfterUpdate();
+		// DOM更新の前後でupdateライフサイクルフックを発火しつつタスクを実行する
+		this.#component.onBeforeUpdate();
+		for (const task of taskSet) {
+			// DOM更新は同期的に行われるべきのため非同期関数の場合は考慮しない
+			createWrapperFunction(task, this.#component)();
 		}
+		this.#component.onAfterUpdate();
 	}
 }
 
@@ -120,7 +119,7 @@ class ComponentLabel {
 
 	/**
 	 * 状態の更新の蓄積を行う
-	 * @param { Function } caller 状態の参照先
+	 * @param { CallerType['caller'] } caller 状態の参照先
 	 */
 	update(caller) {
 		createWrapperFunction(caller, this.#component)();
@@ -145,17 +144,18 @@ class IState {
 	/**
 	 * 単方向データの作成
 	 * @param { StateContext } ctx 生成する単方向データが属するコンテキスト
+	 * @param { CallerType['label'] } label 更新の振る舞いを決めるラベル
 	 * @returns { { state: IState<T>; caller?: { caller: CallerType; states: State<unknown>[] }} } 呼び出し元情報
 	 */
-	unidirectional(ctx) { throw new Error('not implemented.'); }
+	unidirectional(ctx, label = undefined) { throw new Error('not implemented.'); }
 
 	/**
-
-	* thisを観測するデータの作成
+	 * thisを観測するデータの作成
 	 * @param { StateContext } ctx 生成するデータが属するコンテキスト
+	 * @param { CallerType['label'] } label 更新の振る舞いを決めるラベル
 	 * @returns { { state: IState<T>; caller?: { caller: CallerType; states: State<unknown>[] }} } 呼び出し元情報
 	 */
-	observe(prop) { throw new Error('not implemented.'); }
+	observe(ctx, label = undefined) { throw new Error('not implemented.'); }
 
 	/**
 	 * 状態変数が属するコンテキストの取得
@@ -190,18 +190,20 @@ class NotState extends IState {
 	/**
 	 * 単方向データの作成
 	 * @param { StateContext } ctx 生成する単方向データが属するコンテキスト
+	 * @param { CallerType['label'] } label 更新の振る舞いを決めるラベル
 	 * @returns { { state: IState<T>; caller?: { caller: CallerType; states: State<unknown>[] }} } 呼び出し元情報
 	 */
-	unidirectional(ctx) {
+	unidirectional(ctx, label = undefined) {
 		return { state: this };
 	}
 
 	/**
 	 * thisを観測するデータの作成
 	 * @param { StateContext } ctx 生成するデータが属するコンテキスト
+	 * @param { CallerType['label'] } label 更新の振る舞いを決めるラベル
 	 * @returns { { state: IState<T>; caller?: { caller: CallerType; states: State<unknown>[] }} } 呼び出し元情報
 	 */
-	observe(prop) {
+	observe(ctx, label = undefined) {
 		return { state: this };
 	}
 }
@@ -252,11 +254,12 @@ class State extends IState {
 	/**
 	 * 単方向データの作成
 	 * @param { StateContext } ctx 生成する単方向データが属するコンテキスト
+	 * @param { CallerType['label'] } label 更新の振る舞いを決めるラベル
 	 * @returns { { state: IState<T>; caller?: { caller: CallerType; states: State<unknown>[] }} } 呼び出し元情報
 	 */
-	unidirectional(ctx) {
+	unidirectional(ctx, label = undefined) {
 		const dest = new State(ctx, undefined);
-		return { state: dest, caller: this.ctx.unidirectional(this, dest) };
+		return { state: dest, caller: this.ctx.unidirectional(this, dest, label) };
 	}
 
 	/**
@@ -320,27 +323,30 @@ class State extends IState {
 	 * thisを観測するデータの作成
 	 * @overload
 	 * @param { StateContext } prop 生成するデータが属するコンテキスト
+	 * @param { CallerType['label'] } label 更新の振る舞いを決めるラベル
 	 * @returns { { state: IState<T>; caller?: { caller: CallerType; states: State<unknown>[] }} } 呼び出し元情報
 	 */
 	/**
 	 * propの観測(onreferenceの連鎖的な追跡も実施する)
 	 * @overload
 	 * @param { CtxValueType<T> | () => T } prop 観測対象の変数
+	 * @param { CallerType['label'] } label 更新の振る舞いを決めるラベル
 	 * @returns { { caller: CallerType; states: State<unknown>[] } | undefined } 呼び出し元情報
 	 */
 	/**
 	 * propの観測(onreferenceの連鎖的な追跡も実施する)/thisを観測するデータの作成
 	 * @param { CtxValueType<T> | (() => T) | StateContext } prop 観測対象の変数/生成するデータが属するコンテキスト
+	 * @param { CallerType['label'] } label 更新の振る舞いを決めるラベル
 	 */
-	observe(prop) {
+	observe(prop, label = undefined) {
 		if (prop instanceof StateContext) {
 			/** @type { State<T> } */
 			const state = new State(prop, undefined);
-			return { state, caller: state.observe(this) };
+			return { state, caller: state.observe(this, label) };
 		}
 		if (prop instanceof State || prop instanceof Computed || prop instanceof Function) {
 			// onreferenceが発火しないように無効化
-			const caller = this.ctx.noreference(() => this.ctx.unidirectional(prop, this));
+			const caller = this.ctx.noreference(() => this.ctx.unidirectional(prop, this, label));
 			// state.onreferenceなしでstateが1つ以上の参照をもつ(親への状態の伝播なしで状態の参照が存在する場合)
 			// もしくはstate.onreferenceなしでstateが2つ以上の参照をもつ(親への状態の伝播ありで状態の参照が存在する場合)
 			// もしくはonreference()の戻り値がtrue(親への状態の伝播ありで祖先で状態の参照が存在する場合)
@@ -403,12 +409,13 @@ class Computed extends IState {
 	/**
 	 * コンストラクタ
 	 * @param { StateContext } ctx 状態変数を扱っているコンテキスト
+	 * @param { CallerType['label'] } label 更新の振る舞いを決めるラベル
 	 * @param { () => T } f 算出プロパティを計算する関数
 	 */
-	constructor(ctx, f) {
+	constructor(ctx, f, label = undefined) {
 		super();
 		this.#state = new State(ctx, undefined);
-		this.#state.observe(f);
+		this.#state.observe(f, label);
 	}
 
 	get value() { return this.#state.value; }
@@ -416,22 +423,24 @@ class Computed extends IState {
 	/**
 	 * 単方向データの作成
 	 * @param { StateContext } ctx 生成する単方向データが属するコンテキスト
+	 * @param { CallerType['label'] } label 更新の振る舞いを決めるラベル
 	 * @returns { { state: IState<T>; caller?: { caller: CallerType; states: State<unknown>[] }} } 呼び出し元情報
 	 */
-	unidirectional(ctx) {
+	unidirectional(ctx, label = undefined) {
 		const dest = new State(ctx, undefined);
-		return { state: dest, caller: this.ctx.unidirectional(this, dest) };
+		return { state: dest, caller: this.ctx.unidirectional(this, dest, label) };
 	}
 
 	/**
 	 * thisを観測するデータの作成
 	 * @param { StateContext } ctx 生成するデータが属するコンテキスト
+	 * @param { CallerType['label'] } label 更新の振る舞いを決めるラベル
 	 * @returns { { state: IState<T>; caller?: { caller: CallerType; states: State<unknown>[] }} } 呼び出し元情報
 	 */
-	observe(prop) {
+	observe(ctx, label = undefined) {
 		/** @type { State<T> } */
-		const state = new State(prop, undefined);
-		return { state, caller: state.observe(this) };
+		const state = new State(ctx, undefined);
+		return { state, caller: state.observe(this, label) };
 	}
 
 	/**
@@ -2233,37 +2242,36 @@ class StateContext {
 
 	/**
 	 * 単方向データの作成
-	 * @template T, U
+	 * @template T
 	 * @param { IState<T> | () => T } src 作成元のデータ
-	 * @param { State<U> } dest 作成対象のデータ
-	 * @param { (from: T) => U } trans 変換関数
+	 * @param { State<T> } dest 作成対象のデータ
+	 * @param { CallerType['label'] } label 更新の振る舞いを決めるラベル
 	 * @returns { { caller: CallerType; states: State<unknown>[] } } 呼び出し元情報
 	 */
-	unidirectional(src, dest, trans = x => x) {
+	unidirectional(src, dest, label = undefined) {
 		const ctx = src instanceof Function ? this : src.ctx ?? this;
 		let circuit = false;
-		if (src instanceof Function) {
-			return ctx.call({ caller: () => {
+		const callerType = {
+			caller: src instanceof Function ?
+			() => {
 				// srcの変更で必ず発火させつつ
 				// destの変更およびsrc = destな操作で発火および循環させない
 				if (!circuit) {
 					circuit = true;
-					dest.value = trans(src());
+					dest.value = src();
 					circuit = false;
 				}
-			}});
-		}
-		else {
-			return ctx.call({ caller: () => {
-				// srcの変更で必ず発火させつつ
-				// destの変更およびsrc = destな操作で発火および循環させない
+			} :
+			() => {
 				if (!circuit) {
 					circuit = true;
-					dest.value = trans(src.value);
+					dest.value = src.value;
 					circuit = false;
 				}
-			}});
-		}
+			}
+			,label
+		};
+		return ctx.call(callerType);
 	}
 }
 
@@ -2334,7 +2342,7 @@ class Context {
 
 	/**
 	 * このコンテキストで関数を実行する(状態変数の更新操作は基本的に禁止)
-	 * @param { Function | CallerType } caller 状態変数の呼び出し元となる関数
+	 * @param { CallerType['caller'] | CallerType } caller 状態変数の呼び出し元となる関数
 	 * @return { { caller: CallerType; states: State<unknown>[] } }
 	 */
 	call(caller) {
