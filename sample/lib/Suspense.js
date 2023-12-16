@@ -476,12 +476,11 @@ class GenSuspenseStateNodeSet extends GenStateNodeSet {
 
 /**
  * 非同期処理をキャッチして代替するノードを表示する擬似コンポーネント
- * @param { Context } ctx
  * @param { CompPropTypes<typeof Suspense> } props 
  * @param { [GenStateNode] } children
  * @returns 
  */
-function Suspense(ctx, props, children) {
+function Suspense(props, children) {
 	return new GenSuspenseStateNodeSet(props, children);
 }
 Suspense.propTypes = {

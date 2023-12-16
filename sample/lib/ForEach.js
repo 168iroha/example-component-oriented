@@ -1,4 +1,4 @@
-import { State, StateNode, StateNodeSet, GenStateNode, GenStateNodeSet, GenStatePlaceholderNode, Context, watch } from "../../src/core.js";
+import { State, StateNode, StateNodeSet, GenStateNode, GenStateNodeSet, GenStatePlaceholderNode, Context, watch, normalizeCtxChild } from "../../src/core.js";
 import { SwitchingPage, SuspendGroup } from "./Suspense.js";
 
 /**
@@ -65,7 +65,7 @@ class VariableStateNodeSet extends StateNodeSet {
 							throw new Error(`Key ${key} is duplicated.`);
 						}
 						// 現在表示していない対象を表示する場合は構築する
-						const { set, sibling } = (new GenStateNodeSet(ctx.normalizeCtxChild(gen(e, key, props.key.value)))).buildStateNodeSet(ctx);
+						const { set, sibling } = (new GenStateNodeSet(normalizeCtxChild(gen(e, key, props.key.value)))).buildStateNodeSet(ctx);
 						const suspendGroup = new SuspendGroup();
 						const switchingPage = new SwitchingPage(suspendGroup);
 						// 各種イベントのインスタンスの単方向関連付け
@@ -86,7 +86,7 @@ class VariableStateNodeSet extends StateNodeSet {
 				}
 				// 表示する要素が存在しないときは代わりにplaceholderを設置
 				if (nodeSetList.length === 0) {
-					const { set, sibling } = (new GenStateNodeSet([new GenStatePlaceholderNode(ctx)])).buildStateNodeSet(ctx);
+					const { set, sibling } = (new GenStateNodeSet([new GenStatePlaceholderNode()])).buildStateNodeSet(ctx);
 					for (const { node, ctx } of sibling) {
 						node.build(ctx);
 					}
@@ -142,7 +142,7 @@ class VariableStateNodeSet extends StateNodeSet {
 		// 初期状態の構築
 		for (const e of props.target.value) {
 			const key = props.key.value(e);
-			const { set, sibling: sibling_ } = (new GenStateNodeSet(ctx.normalizeCtxChild(gen(e, key, props.key.value)))).buildStateNodeSet(ctx);
+			const { set, sibling: sibling_ } = (new GenStateNodeSet(normalizeCtxChild(gen(e, key, props.key.value)))).buildStateNodeSet(ctx);
 			const suspendGroup = new SuspendGroup();
 			const switchingPage = new SwitchingPage(suspendGroup);
 			// 各種イベントのインスタンスの単方向関連付け
@@ -265,12 +265,11 @@ class GenVariableStateNodeSet extends GenStateNodeSet {
 /**
  * 可変なノードを扱う擬似コンポーネント
  * @template T
- * @param { Context } ctx
  * @param { CompPropTypes<typeof ForEach<T>> } props 
  * @param { (v: T, key?: unknown, genkey?: (typeof ForEach['propTypes']['key'])) => (GenStateNode | GenStateNodeSet)[] } children
  * @returns 
  */
-function ForEach(ctx, props, children) {
+function ForEach(props, children) {
 	return new GenVariableStateNodeSet(props, children);
 }
 /**

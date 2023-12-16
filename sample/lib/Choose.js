@@ -1,4 +1,4 @@
-import { State, StateNode, StateNodeSet, GenStateNode, GenStateNodeSet, GenStatePlaceholderNode, Context, watch, StateAsyncComponent } from "../../src/core.js";
+import { State, StateNode, StateNodeSet, GenStateNode, GenStateNodeSet, GenStatePlaceholderNode, Context, watch, StateAsyncComponent, normalizeCtxChild } from "../../src/core.js";
 import { SwitchingPage, SuspendGroup, LocalSuspenseContextForCapture } from "./Suspense.js";
 
 /**
@@ -37,13 +37,13 @@ class ShowStateNodeSet extends StateNodeSet {
 				const flag = props.test.value === undefined || props.test.value(next);
 				// キャッシュヒットの検査
 				const cache = props.cache.value ?? false;
-				const genStateNodeSet = (cache ? this.#cache : undefined) ?? new GenStateNodeSet(ctx.normalizeCtxChild(flag ? gen(next) : [new GenStatePlaceholderNode(ctx)]));
+				const genStateNodeSet = (cache ? this.#cache : undefined) ?? new GenStateNodeSet(normalizeCtxChild(flag ? gen(next) : [new GenStatePlaceholderNode()]));
 				let callback = undefined;
 				ctx.component?.onBeforeUpdate?.();
 				let promise = undefined;
 				if (genStateNodeSet instanceof GenStateNodeSet) {
 					// 表示する要素が存在しないときは代わりにplaceholderを設置
-					const { set, sibling } = genStateNodeSet.buildStateNodeSet();
+					const { set, sibling } = genStateNodeSet.buildStateNodeSet(ctx);
 					this.nestedNodeSet = [set];
 					if (cache) {
 						// 結果をキャッシュする
@@ -93,7 +93,7 @@ class ShowStateNodeSet extends StateNodeSet {
 			const val = props.target.value;
 			const flag = val !== undefined && (props.test.value === undefined || props.test.value(val));
 			// 表示する要素が存在しないときは代わりにplaceholderを設置
-			const { set, sibling: sibling_ } = (new GenStateNodeSet(ctx.normalizeCtxChild(flag ? gen(val) : [new GenStatePlaceholderNode(ctx)]))).buildStateNodeSet(ctx);
+			const { set, sibling: sibling_ } = (new GenStateNodeSet(normalizeCtxChild(flag ? gen(val) : [new GenStatePlaceholderNode()]))).buildStateNodeSet(ctx);
 			this.nestedNodeSet = [set];
 			sibling.push(...sibling_);
 			if (flag && (props.cache.value ?? false)) {
@@ -179,12 +179,11 @@ class GenShowStateNodeSet extends GenStateNodeSet {
 /**
  * ノードの選択における条件式を設定する擬似コンポーネント
  * @template T
- * @param { Context } ctx
  * @param { CompPropTypes<typeof When<T>> } props 
  * @param { (v: T) => (GenStateNode | GenStateNodeSet)[] } children
  * @returns 
  */
-function When(ctx, props, children) {
+function When(props, children) {
 	return new GenShowStateNodeSet(props, children)
 }
 /**
@@ -359,7 +358,7 @@ class WhenStateNodeSet extends StateNodeSet {
 			this.#prevChooseIndex = i;
 			if (i === -1) {
 				// 表示する要素が存在しないときは代わりにplaceholderを設置
-				return new GenStateNodeSet([new GenStatePlaceholderNode(ctx)])
+				return new GenStateNodeSet([new GenStatePlaceholderNode()])
 			}
 
 			// Whenのイベントの反映
@@ -378,13 +377,13 @@ class WhenStateNodeSet extends StateNodeSet {
 			const set = this.#cacheTable[i];
 			if (cache) {
 				// キャッシュが存在すればそのまま返す/存在しなければ結果をキャッシュする
-				return set ?? (new GenStateNodeSet(ctx.normalizeCtxChild(nestedNodeSet[i].gen(val)))).getStateNodeSet(s => this.#cacheTable[i] = s);
+				return set ?? (new GenStateNodeSet(normalizeCtxChild(nestedNodeSet[i].gen(val)))).getStateNodeSet(s => this.#cacheTable[i] = s);
 			}
 			else {
 				if (set) {
 					this.#cacheTable[i] = undefined;
 				}
-				return new GenStateNodeSet(ctx.normalizeCtxChild(nestedNodeSet[i].gen(val)));
+				return new GenStateNodeSet(normalizeCtxChild(nestedNodeSet[i].gen(val)));
 			}
 		}
 		return undefined;
@@ -426,12 +425,11 @@ class GenWhenStateNodeSet extends GenStateNodeSet {
 /**
  * ノードの選択を行う擬似コンポーネント
  * @template T
- * @param { Context } ctx
  * @param { CompPropTypes<typeof Choose<T>> } props 
  * @param { GenShowStateNodeSet<T>[] } children
  * @returns 
  */
-function Choose(ctx, props, children) {
+function Choose(props, children) {
 	return new GenWhenStateNodeSet(props, children)
 }
 /**

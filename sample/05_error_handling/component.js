@@ -1,4 +1,4 @@
-import { useState, GenStateNode, Context } from "../../src/core.js";
+import { useState, GenStateNode, Context, $, t } from "../../src/core.js";
 
 /**
  * @template T
@@ -14,7 +14,7 @@ import { useState, GenStateNode, Context } from "../../src/core.js";
  */
 function CountButton(ctx, props, children) {
 	let cnt = 0;
-	return ctx.$('button', { onclick: () => {
+	return $('button', { onclick: () => {
 		cnt = (cnt + 1) % 5;
 		// カウントが5の倍数のときは例外を送信
 		if (cnt === 0) {
@@ -46,7 +46,7 @@ function ShowCount(ctx, props) {
 		}
 	});
 
-	return ctx.$('div', [ctx.t`Count is: ${props.cnt}`]);
+	return $('div', [t`Count is: ${props.cnt}`]);
 }
 ShowCount.propTypes = {
 	/** @type { number } 現在のカウント */
@@ -74,11 +74,11 @@ function Main(ctx, props) {
 		console.log('[errorCaptured] Main', error.message);
 	});
 
-	return ctx.$('div', [
-		ctx.$(CountButton, { onclick: () => ++cnt.value }, [
-			ctx.t`CountUp`
+	return $('div', [
+		$(CountButton, { onclick: () => ++cnt.value }, [
+			t`CountUp`
 		]),
-		ctx.$(ShowCount, { cnt })
+		$(ShowCount, { cnt })
 	]);
 }
 Main.propTypes = {
