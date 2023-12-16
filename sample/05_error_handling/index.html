@@ -4,14 +4,11 @@
 		<meta charset="utf-8">
 		<script type="module">
 			import Main from "./component.js";
-			import { Context } from "../../src/core.js";
-
-			// コンテキストの宣言
-			const ctx = new Context();
+			import { $ } from "../../src/core.js";
 
 			// コンポーネントの設置
 			const element = document.getElementById('app');
-			ctx.$(Main).mount(element);
+			$(Main).mount(element);
 		</script>
 	</head>
 	<body>

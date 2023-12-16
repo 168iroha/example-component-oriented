@@ -1,4 +1,4 @@
-import { useState, Context } from "../../src/core.js";
+import { useState, Context, $ } from "../../src/core.js";
 import { ForEach } from "../lib/ForEach.js";
 
 /**
@@ -16,9 +16,9 @@ function Main(ctx) {
 	const inputVal = useState(ctx, '');
 	let nextID = stateList.value.length;
 
-	return ctx.$('div', [
-		ctx.$('input', { oninput: e => inputVal.value = e.target.value, value: inputVal }),
-		ctx.$('button', { onclick: () => {
+	return $('div', [
+		$('input', { oninput: e => inputVal.value = e.target.value, value: inputVal }),
+		$('button', { onclick: () => {
 			const input = inputVal.value.trim();
 			if (input.length === 0) {
 				alert('空のアイテムは追加できません');
@@ -26,7 +26,7 @@ function Main(ctx) {
 			}
 			stateList.value = [...stateList.value, { id: nextID++, val: input }];
 		} }, ['項目の追加']),
-		ctx.$('button', { onclick: () => {
+		$('button', { onclick: () => {
 			// フィッシャー–イェーツのアルゴリズムでシャッフル
 			const nextStateList = [...stateList.value];
 			for (let i = stateList.value.length - 1; i >= 0 ; --i) {
@@ -37,9 +37,9 @@ function Main(ctx) {
 		} }, ['シャッフル']),
 
 		// リスト要素をレンダリングする
-		ctx.$('ul', [
-			ctx.$(ForEach, { target: stateList, key: v => v.id }, (item, key, genkey) => [
-				ctx.$('li', { onclick: () => stateList.value = stateList.value.filter(v => genkey(v) !== key) }, [item.val])
+		$('ul', [
+			$(ForEach, { target: stateList, key: v => v.id }, (item, key, genkey) => [
+				$('li', { onclick: () => stateList.value = stateList.value.filter(v => genkey(v) !== key) }, [item.val])
 			]),
 		])
 	]);

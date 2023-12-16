@@ -1,4 +1,4 @@
-import { useState, GenStateNode, Context } from "../../src/core.js";
+import { useState, useComputed, GenStateNode, Context, $, t } from "../../src/core.js";
 import { When } from "../lib/Choose.js";
 
 /**
@@ -15,10 +15,10 @@ import { When } from "../lib/Choose.js";
  */
 function CountButton(ctx, props, children) {
 	// 雑に同じボタンを3つ設置する
-	return ctx.$('div', [
-		ctx.$('button', { onclick: () => props.onclick.value() }, children),
-		ctx.$('button', { onclick: () => props.onclick.value() }, children),
-		ctx.$('button', { onclick: () => props.onclick.value() }, children),
+	return $('div', [
+		$('button', { onclick: () => props.onclick.value() }, children),
+		$('button', { onclick: () => props.onclick.value() }, children),
+		$('button', { onclick: () => props.onclick.value() }, children),
 	]);
 }
 CountButton.propTypes = {
@@ -37,13 +37,13 @@ function DualInput(ctx) {
 
 	return {
 		// ノードの定義
-		node: ctx.$('div', [
-			ctx.$('input', { value: '初期値1' }).observe({ value: input1 }),
-			ctx.$('input', { value: '初期値2' }).observe({ value: input2 }),
+		node: $('div', [
+			$('input', { value: '初期値1' }).observe({ value: input1 }),
+			$('input', { value: '初期値2' }).observe({ value: input2 }),
 		]),
 		// 外部に公開する状態の定義
 		exposeStates: {
-			value: ctx.t`${input1}+${input2}`
+			value: t`${input1}+${input2}`
 		}
 	};
 }
@@ -57,22 +57,23 @@ function DualInput(ctx) {
 function Main(ctx, props) {
 	// カウンタの初期値のため状態変数ではなく現時点の値として受け取る
 	const cnt = useState(ctx, props.init.value);
+	const cnt2 = useComputed(ctx, () => cnt.value * 2);
 	const input = useState(ctx, '');
 
-	return ctx.$('div', [
-		ctx.$(CountButton, { onclick: () => ++cnt.value }, [
-			ctx.t`Count is: ${cnt}`
+	return $('div', [
+		$(CountButton, { onclick: () => ++cnt.value }, [
+			t`Count is: ${cnt}`
 		]),
-		ctx.$('hr'),
-		ctx.$('div', [
-			ctx.t`Count×2 is: ${() => cnt.value * 2}`,
-			ctx.$(When, { target: cnt, test: cnt => cnt % 2 === 0 }, () => [
-				ctx.$('div', { style: { color: 'red' } }, [ctx.t`Cnt is even.`])
+		$('hr'),
+		$('div', [
+			t`Count×2 is: ${cnt2}`,
+			$(When, { target: cnt, test: cnt => cnt % 2 === 0 }, () => [
+				$('div', { style: { color: 'red' } }, [t`Cnt is even.`])
 			])
 		]),
-		ctx.$('div', [
-			ctx.$(DualInput).observe({ value: input }),
-			ctx.t`Input Text is: ${input}`
+		$('div', [
+			$(DualInput).observe({ value: input }),
+			t`Input Text is: ${input}`
 		])
 	]);
 }

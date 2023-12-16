@@ -1,4 +1,4 @@
-import { useState, GenStateNode, Context } from "../../src/core.js";
+import { useState, GenStateNode, Context, $, t } from "../../src/core.js";
 import { Choose, When } from "../lib/Choose.js";
 
 /**
@@ -27,7 +27,7 @@ function CountButton(ctx, props, children) {
 		console.log('[afterUpdate] CountButton');
 	});
 
-	return ctx.$('button', { onclick: () => props.onclick.value() }, children);
+	return $('button', { onclick: () => props.onclick.value() }, children);
 }
 CountButton.propTypes = {
 	/** @type { () => unknown } クリックイベント */
@@ -54,7 +54,7 @@ function ShowCount(ctx, props) {
 		console.log('[afterUpdate] ShowCount');
 	});
 
-	return ctx.$('div', [ctx.t`Count is: ${props.cnt}`]);
+	return $('div', [t`Count is: ${props.cnt}`]);
 }
 ShowCount.propTypes = {
 	/** @type { number } 現在のカウント */
@@ -85,12 +85,12 @@ function Main(ctx, props) {
 		console.log('[afterUpdate] Main');
 	});
 
-	return ctx.$('div', [
-		ctx.$(CountButton, { onclick: () => ++cnt.value }, [
-			ctx.t`CountUp`
+	return $('div', [
+		$(CountButton, { onclick: () => ++cnt.value }, [
+			t`CountUp`
 		]),
-		ctx.$(Choose, { target: cnt }, [
-			ctx.$(When, { test: cnt => cnt % 5 !== 1 }, () => [ctx.$(ShowCount, { cnt })]),
+		$(Choose, { target: cnt }, [
+			$(When, { test: cnt => cnt % 5 !== 1 }, () => [$(ShowCount, { cnt })]),
 		])
 	]);
 }
