@@ -770,8 +770,14 @@ class GenStateNode {
 						const childNode = cnt < childNodes.length ? childNodes[cnt++] : undefined;
 						// ノードの比較を実施(genはundefinedにはならない)
 						if (gen instanceof GenStateComponent) {
-							if (useChildNodes && !childNode && !(gen instanceof GenStateAsyncComponent)) {
-								throw new Error('The number of nodes is insufficient.');
+							if (gen instanceof GenStateAsyncComponent) {
+								// GenStateAsyncComponentの場合はplaceholderを生成するため戻る
+								--cnt;
+							}
+							else {
+								if (useChildNodes && !childNode) {
+									throw new Error('The number of nodes is insufficient.');
+								}
 							}
 							// 子要素をコンポーネントを生成するノードで置き換え
 							children[i] = gen;
@@ -818,6 +824,11 @@ class GenStateNode {
 						if (child instanceof GenStateComponent) {
 							const ret = this.#mountComponent(ctx, child, childNode);
 							node = ret.node;
+							if (child instanceof GenStateAsyncComponent) {
+								// StateAsyncComponentの場合はplaceholderで保管されるため次のchildNodeへ移動しないようにする
+								parent.insertBefore(node.element, childNode);
+								continue;
+							}
 							queueComponent.push({ ...ret, element: childNode });
 						}
 						else {
