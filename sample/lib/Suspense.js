@@ -1,8 +1,13 @@
-import { StateNode, StatePlaceholderNode, StateNodeSet, GenStateNode, GenStateNodeSet, Context, ILocalSuspenseContext, SuspenseContext } from "../../src/core.js";
+import { StateNode, StatePlaceholderNode, StateNodeSet, GenStateNode, GenStateNodeSet, Context, ILocalSuspenseContext, SuspenseContext, normalizeCtxProps } from "../../src/core.js";
 
 /**
  * @template T
  * @typedef { import("../../src/core.js").CompPropTypes<T> } CompPropTypes コンポーネント上でのプロパティの型
+ */
+
+/**
+ * @template T
+ * @typedef { import("../../src/core.js").CtxPropTypes<T> } CtxPropTypes コンテキスト上でのプロパティの型
  */
 
 /**
@@ -463,11 +468,11 @@ class GenSuspenseStateNodeSet extends GenStateNodeSet {
 		ctx2.call(() => {
 			suspendGroup.switchingPage.beforeSwitching = this.#props.onBeforeSwitching.value;
 		});
-		ctx2.call(() => {
+		ctx2.call({ caller: () => {
 			if (this.#props.fallback.value) {
 				suspendGroup.alternativePage = this.#props.fallback.value.build(ctx2);
 			}
-		});
+		}, label: ctx2.sideEffectLabel });
 		this.nestedNodeSet[0].getStateNode(node => suspendGroup.page = node);
 		const set = new StateNodeSet(ctx2, this.nestedNodeSet, sibling);
 		return { set, ctx: ctx2, sibling };
@@ -476,12 +481,12 @@ class GenSuspenseStateNodeSet extends GenStateNodeSet {
 
 /**
  * 非同期処理をキャッチして代替するノードを表示する擬似コンポーネント
- * @param { CompPropTypes<typeof Suspense> } props 
+ * @param { CtxPropTypes<typeof Suspense> } props 
  * @param { [GenStateNode] } children
  * @returns 
  */
 function Suspense(props, children) {
-	return new GenSuspenseStateNodeSet(props, children);
+	return new GenSuspenseStateNodeSet(normalizeCtxProps(Suspense, props), children);
 }
 Suspense.propTypes = {
 	/** @type { GenStateNode | undefined } 非同期処理中に表示をするノード(非同期ノードの設定は非推奨) */

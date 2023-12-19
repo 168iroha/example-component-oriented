@@ -1,9 +1,14 @@
-import { State, StateNode, StateNodeSet, GenStateNode, GenStateNodeSet, GenStatePlaceholderNode, Context, watch, StateAsyncComponent, normalizeCtxChild } from "../../src/core.js";
+import { State, StateNode, StateNodeSet, GenStateNode, GenStateNodeSet, GenStatePlaceholderNode, Context, watch, StateAsyncComponent, normalizeCtxChild, normalizeCtxProps } from "../../src/core.js";
 import { SwitchingPage, SuspendGroup, LocalSuspenseContextForCapture } from "./Suspense.js";
 
 /**
  * @template T
  * @typedef { import("../../src/core.js").CompPropTypes<T> } CompPropTypes コンポーネント上でのプロパティの型
+ */
+
+/**
+ * @template T
+ * @typedef { import("../../src/core.js").CtxPropTypes<T> } CtxPropTypes コンテキスト上でのプロパティの型
  */
 
 /**
@@ -114,7 +119,7 @@ class ShowStateNodeSet extends StateNodeSet {
 					switchingPage.insertBefore(page, afterElement, parent, props.cancellable.value ?? true);
 				}
 				switchingPage.afterSwitching = props.onAfterSwitching.value;
-			}, label: ctx.component?.componentLabel }]);
+			}, label: ctx.sideEffectLabel }]);
 		}
 	}
 
@@ -179,12 +184,12 @@ class GenShowStateNodeSet extends GenStateNodeSet {
 /**
  * ノードの選択における条件式を設定する擬似コンポーネント
  * @template T
- * @param { CompPropTypes<typeof When<T>> } props 
+ * @param { CtxPropTypes<typeof When<T>> } props 
  * @param { (v: T) => (GenStateNode | GenStateNodeSet)[] } children
  * @returns 
  */
 function When(props, children) {
-	return new GenShowStateNodeSet(props, children)
+	return new GenShowStateNodeSet(normalizeCtxProps(When, props), children)
 }
 /**
  * @template T
@@ -321,7 +326,7 @@ class WhenStateNodeSet extends StateNodeSet {
 			}
 			switchingPage.afterSwitching = props.onAfterSwitching.value;
 			switchingPage.beforeSwitching = props.onBeforeSwitching.value;
-		}, label: ctx.component?.componentLabel }]);
+		}, label: ctx.sideEffectLabel }]);
 	}
 
 	/**
@@ -425,12 +430,12 @@ class GenWhenStateNodeSet extends GenStateNodeSet {
 /**
  * ノードの選択を行う擬似コンポーネント
  * @template T
- * @param { CompPropTypes<typeof Choose<T>> } props 
+ * @param { CtxPropTypes<typeof Choose<T>> } props 
  * @param { GenShowStateNodeSet<T>[] } children
  * @returns 
  */
 function Choose(props, children) {
-	return new GenWhenStateNodeSet(props, children)
+	return new GenWhenStateNodeSet(normalizeCtxProps(Choose, props), children)
 }
 /**
  * @template T
