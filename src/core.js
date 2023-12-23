@@ -783,7 +783,7 @@ class GenStateNode {
 				const childNodes = element?.childNodes ?? [];
 				if (children.length > 0) {
 					// nodeに子が設定されているときはElementノード以外を削除
-					for (const childNode of childNodes) {
+					for (const childNode of [...childNodes]) {
 						if (childNode.nodeType !== Node.ELEMENT_NODE) {
 							childNode.remove();
 						}
