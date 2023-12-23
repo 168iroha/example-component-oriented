@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta charset="utf-8">
+		<script type="module">
+			// './node_modules/.bin/babel component.jsx -o component.js'により
+			// 事前にcomponent.jsを生成しておくこと
+			import Main from "./component.js";
+			import { $ } from "../../src/core.js";
+
+			// コンポーネントの設置
+			const element = document.getElementById('app');
+			// DOMノードに書き込み
+			$(Main).write(element);
+			// マウント
+			$(Main).mount(element);
+		</script>
+	</head>
+	<body>
+		<div id="app"></div>
+	</body>
+</html>
