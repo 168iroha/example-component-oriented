@@ -1,9 +1,14 @@
-import { State, StateNode, StateNodeSet, GenStateNode, GenStateNodeSet, GenStatePlaceholderNode, Context, watch, normalizeCtxChild } from "../../src/core.js";
+import { State, StateNode, StateNodeSet, GenStateNode, GenStateNodeSet, GenStatePlaceholderNode, Context, watch, normalizeCtxChild, normalizeCtxProps } from "../../src/core.js";
 import { SwitchingPage, SuspendGroup } from "./Suspense.js";
 
 /**
  * @template T
  * @typedef { import("../../src/core.js").CompPropTypes<T> } CompPropTypes コンポーネント上でのプロパティの型
+ */
+
+/**
+ * @template T
+ * @typedef { import("../../src/core.js").CtxPropTypes<T> } CtxPropTypes コンテキスト上でのプロパティの型
  */
 
 /**
@@ -170,7 +175,7 @@ class VariableStateNodeSet extends StateNodeSet {
 				switching.insertBefore(set, afterElement, parent, cancellable);
 				switching.afterSwitching = props.onAfterSwitching.value;
 			}
-		}, label: ctx.component?.componentLabel }]);
+		}, label: ctx.sideEffectLabel }]);
 	}
 
 	/**
@@ -265,12 +270,12 @@ class GenVariableStateNodeSet extends GenStateNodeSet {
 /**
  * 可変なノードを扱う擬似コンポーネント
  * @template T
- * @param { CompPropTypes<typeof ForEach<T>> } props 
+ * @param { CtxPropTypes<typeof ForEach<T>> } props 
  * @param { (v: T, key?: unknown, genkey?: (typeof ForEach['propTypes']['key'])) => (GenStateNode | GenStateNodeSet)[] } children
  * @returns 
  */
 function ForEach(props, children) {
-	return new GenVariableStateNodeSet(props, children);
+	return new GenVariableStateNodeSet(normalizeCtxProps(ForEach, props), children);
 }
 /**
  * @template T
