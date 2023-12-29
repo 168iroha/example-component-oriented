@@ -599,6 +599,13 @@ class Computed extends IState {
  */
 
 /**
+ * @typedef {{
+ * 		node: StateNode;
+ * 		children: { node: GenStateNode; ctx: Context }[]
+ * }} BuildCurrentResultType buildCurrentにおける結果型
+ */
+
+/**
  * 状態を持ったノード
  */
 class StateNode {
@@ -644,6 +651,8 @@ class GenStateNode {
 	#deliverStateNodeCallback = [];
 	/** @type { ReferrablePropsInStateNode | undefined } 参照する対象 */
 	#referrableStates = undefined;
+	/** @type { (() => Promise<unknown>)[] } Promiseを生成する関数のリスト */
+	#genPromiseList = [];
 
 	/**
 	 * ノードの参照を行う
@@ -664,6 +673,15 @@ class GenStateNode {
 	}
 
 	/**
+	 * buildCurrent時に構築の待機を行うためのPromiseを生成するコールバックの追加
+	 * @param { () => Promise<unknown> } callback Promiseを生成するコールバック
+	 */
+	addGenPromise(callback) {
+		this.#genPromiseList.push(callback);
+		return this;
+	}
+
+	/**
 	 * 別物のStateNodeを生成しても問題のないGetStateNodeを生成
 	 * @returns { GenStateNode }
 	 */
@@ -674,18 +692,34 @@ class GenStateNode {
 	 * @protected
 	 * @param { Context } ctx ノードを生成する場所
 	 * @param { HTMLElement | Text | undefined } target マウント対象のDOMノード
-	 * @returns { { node: StateNode; children: { node: GenStateNode; ctx: Context }[] } }
+	 * @returns { BuildCurrentResultType }
 	 */
 	buildCurrentImpl(ctx, target) { throw new Error('not implemented.'); }
 
 	/**
+	 * @overload
+	 * @param { Context } ctx ノードを生成する場所
+	 * @param { HTMLElement | Text | undefined } target マウント対象のDOMノード
+	 * @param { 'nowait' } waitFlag 蓄積したPromiseを処理する方式の指定
+	 * @returns { BuildCurrentResultType }
+	 */
+	/**
+	 * @overload
+	 * @param { Context } ctx ノードを生成する場所
+	 * @param { HTMLElement | Text | undefined } target マウント対象のDOMノード
+	 * @param { 'wait' } waitFlag 蓄積したPromiseを処理する方式の指定
+	 * @returns { Promise<BuildCurrentResultType> | BuildCurrentResultType }
+	 */
+	/**
 	 * 自要素を構築する
 	 * @param { Context } ctx ノードを生成する場所
 	 * @param { HTMLElement | Text | undefined } target マウント対象のDOMノード
-	 * @returns { { node: StateNode; children: { node: GenStateNode; ctx: Context }[] } }
+	 * @param { 'wait' | 'nowait' } waitFlag 蓄積したPromiseを処理する方式の指定
 	 */
-	buildCurrent(ctx, target) {
+	buildCurrent(ctx, target, waitFlag) {
+		ctx.genStateNode = this;
 		const ret = this.buildCurrentImpl(ctx, target);
+		ctx.genStateNode = undefined;
 		this.#deliverStateNodeCallback.forEach(callback => callback(ret.node));
 		this.#deliverStateNodeCallback = [];
 		if (this.#referrableStates) {
@@ -698,35 +732,55 @@ class GenStateNode {
 				this.#referrableStates.ctx.value = ret.node instanceof StateComponent ? ret.node.ctx : ctx;
 			}
 		}
+		if (this.#genPromiseList.length > 0) {
+			// 蓄積したPromiseの評価を行う
+			const PromiseList = this.#genPromiseList.map(callback => callback());
+			this.#genPromiseList = [];
+			if (waitFlag === 'wait') {
+				// Promiseの評価をして次のノードの構築を遅延させる
+				return Promise.all(PromiseList).then(() => ret);
+			}
+		}
 		return ret;
 	}
 
 	/**
-	 * 子孫要素を構築する
-	 * @param { Context | undefined } ctx ノードを生成する場所
+	 * @overload
+	 * @param { Context } ctx コンポーネントを構築するコンテキス
+	 * @param { GenStateNode } gen コンポーネントを生成する対象
+	 * @param { HTMLElement | undefined } element マウントに用いるDOMノード
+	 * @param { Set<ICallerLabel> } lockedLabelSet 現在のbuildでロックを書けたらベルのリスト
+	 * @param { 'nowait' } waitFlag 蓄積したPromiseを処理する方式の指定
+	 * @returns { Generator<BuildCurrentResultType, BuildCurrentResultType & { ctx: Context }, BuildCurrentResultType> }
 	 */
-	build(ctx = undefined) {
-		const { calc, node } = this.#mountImpl(ctx ?? new Context());
-		calc();
-		return node;
-	}
-
+	/**
+	 * @overload
+	 * @param { Context } ctx コンポーネントを構築するコンテキス
+	 * @param { GenStateNode } gen コンポーネントを生成する対象
+	 * @param { HTMLElement | undefined } element マウントに用いるDOMノード
+	 * @param { Set<ICallerLabel> } lockedLabelSet 現在のbuildでロックを書けたらベルのリスト
+	 * @param { 'wait' } waitFlag 蓄積したPromiseを処理する方式の指定
+	 * @returns { Generator<BuildCurrentResultType | Promise<BuildCurrentResultType>, BuildCurrentResultType & { ctx: Context }, BuildCurrentResultType> }
+	 */
 	/**
 	 * コンポーネントに対してマウントを試みる
 	 * @param { Context } ctx コンポーネントを構築するコンテキス
 	 * @param { GenStateNode } gen コンポーネントを生成する対象
 	 * @param { HTMLElement | undefined } element マウントに用いるDOMノード
 	 * @param { Set<ICallerLabel> } lockedLabelSet 現在のbuildでロックを書けたらベルのリスト
-	 * @returns 
+	 * @param { 'wait' | 'nowait' } waitFlag 蓄積したPromiseを処理する方式の指定
+	 * @returns { Generator<BuildCurrentResultType | Promise<BuildCurrentResultType>, BuildCurrentResultType & { ctx: Context }, BuildCurrentResultType> }
 	 */
-	#mountComponent(ctx, gen, element, lockedLabelSet) {
+	*#mountComponent(ctx, gen, element, lockedLabelSet, waitFlag) {
 		/** @type { StateComponent | undefined } */
 		let prevNode = undefined;
+		/** @type { StateComponent[] } */
+		const comonentList = [];
 		while (gen instanceof GenStateComponent) {
-			const { node, children } = gen.buildCurrent(ctx, element);
+			const { node, children } = yield gen.buildCurrent(ctx, element, waitFlag);
 			lockedLabelSet.add(node.ctx.sideEffectLabel);
 			if ((prevNode instanceof StateComponent) && !(prevNode instanceof StateAsyncComponent)) {
-				prevNode.onMount();
+				comonentList.push(prevNode);
 				const prevCtx = prevNode.ctx;
 				if (!prevCtx.hasFunctionDelivery && prevCtx.state.lockedCount(prevCtx.sideEffectLabel) === 0) {
 					// 副作用はないためロックを解除
@@ -740,16 +794,34 @@ class GenStateNode {
 			prevNode = node;
 		}
 		// elementが与えられたならばこのタイミングでマウントされる
-		return { ctx, ...gen.buildCurrent(ctx, element) };
+		const ret = yield gen.buildCurrent(ctx, element, waitFlag);
+		// コンポーネントを示すDOMノードが構築された段階でonMountを発火
+		comonentList.forEach(node => node.onMount());
+		return { ctx, ...ret };
 	}
 
+	/**
+	 * @overload
+	 * @param { Context } ctx ノードを生成する場所
+	 * @param { HTMLElement | undefined } target マウント対象のDOMノード
+	 * @param { 'nowait' } waitFlag 蓄積したPromiseを処理する方式の指定
+	 * @returns { Generator<BuildCurrentResultType, { labelSet: Set<ICallerLabel> ; node: StateNode }, BuildCurrentResultType> }
+	 */
+	/**
+	 * @overload
+	 * @param { Context } ctx ノードを生成する場所
+	 * @param { HTMLElement | undefined } target マウント対象のDOMノード
+	 * @param { 'wait' } waitFlag 蓄積したPromiseを処理する方式の指定
+	 * @returns { Generator<BuildCurrentResultType | Promise<BuildCurrentResultType>, { labelSet: Set<ICallerLabel> ; node: StateNode }, BuildCurrentResultType> }
+	 */
 	/**
 	 * DOMノードにマウントする
 	 * @param { Context } ctx ノードを生成する場所
 	 * @param { HTMLElement | undefined } target マウント対象のDOMノード
-	 * @returns { { calc: () => void; node: StateNode } }
+	 * @param { 'wait' | 'nowait' } waitFlag 蓄積したPromiseを処理する方式の指定
+	 * @returns { Generator<BuildCurrentResultType | Promise<BuildCurrentResultType>, { labelSet: Set<ICallerLabel> ; node: StateNode }, BuildCurrentResultType> }
 	 */
-	#mountImpl(ctx, target) {
+	*#mountImpl(ctx, target, waitFlag) {
 		/** @type { undefined | StateNode } */
 		let resuleNode = undefined;
 		this.getStateNode(node => resuleNode = node);
@@ -762,7 +834,7 @@ class GenStateNode {
 			throw new Error('It must be built under the Component.');
 		}
 
-		const ret = this.#mountComponent(ctx, this, target, lockedLabelSet);
+		const ret = yield* this.#mountComponent(ctx, this, target, lockedLabelSet, waitFlag);
 
 		/** @type { { ctx: Context, node: StateNode; children: { node: GenStateNode; ctx: Context }[]; element: HTMLElement | Text | undefined }[] } コンポーネントについての幅優先探索に関するキュー */
 		const queueComponent = [{ ...ret, element: target }];
@@ -784,7 +856,7 @@ class GenStateNode {
 				if (children.length > 0) {
 					// nodeに子が設定されているときはElementノード以外を削除
 					for (const childNode of [...childNodes]) {
-						if (childNode.nodeType !== Node.ELEMENT_NODE) {
+						if (childNode.nodeType !== ctx.window.Node.ELEMENT_NODE) {
 							childNode.remove();
 						}
 					}
@@ -812,7 +884,7 @@ class GenStateNode {
 					}
 					else {
 						if (gen instanceof GenStateTextNode || gen instanceof GenStatePlaceholderNode) {
-							const { node } = gen.buildCurrent(childCtx);
+							const { node } = yield gen.buildCurrent(childCtx, undefined, waitFlag);
 							// 子要素をStateNodeで置き換え
 							children[i] = { node, children: [], element: node.element };
 							// テキストノードもしくはplaceholderであれば挿入して補完する
@@ -825,7 +897,7 @@ class GenStateNode {
 							if (useChildNodes && !childNode) {
 								throw new Error('The number of nodes is insufficient.');
 							}
-							const { node, children: _children } = gen.buildCurrent(childCtx, childNode);
+							const { node, children: _children } = yield gen.buildCurrent(childCtx, childNode, waitFlag);
 							// localTreeの構築
 							children[i] = { node, children: _children, element: childNode };
 							queueNode.push(children[i]);
@@ -850,7 +922,7 @@ class GenStateNode {
 					let node = undefined;
 					// GenStateComponentの場合はカレントノードを構築する
 					if (child instanceof GenStateComponent) {
-						const ret = this.#mountComponent(ctx, child, childNode, lockedLabelSet);
+						const ret = yield* this.#mountComponent(ctx, child, childNode, lockedLabelSet, waitFlag);
 						node = ret.node;
 						if (child instanceof GenStateAsyncComponent) {
 							// StateAsyncComponentの場合はplaceholderで保管されるため次のchildNodeへ移動しないようにする
@@ -887,27 +959,67 @@ class GenStateNode {
 				}
 			}
 		}
-		return { calc: ctx.state.unlock(lockedLabelSet), node: resuleNode };
+		return { labelSet: lockedLabelSet, node: resuleNode };
 	}
 
+	/**
+	 * 子孫要素を構築する
+	 * @param { Context | undefined } ctx ノードを生成する場所
+	 */
+	build(ctx = undefined) {
+		ctx = ctx ?? new Context(window);
+		const generator = this.#mountImpl(ctx, undefined, 'nowait');
+		let arg = undefined;
+		while (true) {
+			const { done, value } = generator.next(arg);
+
+			if (done) {
+				ctx.state.unlock(value.labelSet)();
+				return value.node;
+			}
+			arg = value;
+		}
+	}
+	
 	/**
 	 * DOMノードにマウントする
 	 * @param { HTMLElement } target マウント対象のDOMノード
 	 * @param { Context | undefined } ctx ノードを生成する場所
 	 */
 	mount(target, ctx = undefined) {
-		this.#mountImpl(ctx ?? new Context(), target).calc();
+		ctx = ctx ?? new Context(window);
+		const generator = this.#mountImpl(ctx, target, 'nowait');
+		let arg = undefined;
+		while (true) {
+			const { done, value } = generator.next(arg);
+
+			if (done) {
+				ctx.state.unlock(value.labelSet)();
+				return ctx;
+			}
+			arg = value;
+		}
 	}
 
 	/**
 	 * 後からマウント可能なDOMノードを構築する
 	 * @param { HTMLElement | undefined } target 書き込み対象のDOMノード
 	 * @param { Context | undefined } ctx ノードを生成する場所
-	 * @returns { HTMLElement }
 	 */
-	write(target, ctx = undefined) {
+	async write(target, ctx = undefined) {
 		// 変更の伝播を破棄する
-		return this.#mountImpl(ctx ?? new Context(), target).node.element;
+		ctx = ctx ?? new Context(window);
+		const generator = this.#mountImpl(ctx, target, 'wait');
+		let arg = undefined;
+		while (true) {
+			const { done, value } = generator.next(arg);
+
+			if (done) {
+				ctx.state.unlock(value.labelSet);
+				return ctx;
+			}
+			arg = value instanceof Promise ? await value : value;
+		}
 	}
 }
 
@@ -990,9 +1102,8 @@ class StateNodeSet {
 		for (const node of this.nodeSet()) {
 			const nodeElement = node.element;
 			if (nodeElement === element) {
-				do {
-					element = element?.nextSibling;
-				} while (element?.type === Node.COMMENT_NODE);
+				// 'HTMLElement | Text | undefined'を満たすことを前提とする
+				element = element?.nextSibling;
 			}
 			else {
 				parent.insertBefore(nodeElement, element);
@@ -1153,11 +1264,11 @@ class GenStateTextNode extends GenStateNode {
 	 * @protected
 	 * @param { Context } ctx ノードを生成する場所
 	 * @param { HTMLElement | Text | undefined } target マウント対象のDOMノード
-	 * @returns { { node: StateNode; children: { node: GenStateNode; ctx: Context }[] } }
+	 * @returns { BuildCurrentResultType }
 	 */
 	buildCurrentImpl(ctx, target) {
 		const text = this.#text;
-		const element = document.createTextNode('');
+		const element = ctx.window.document.createTextNode('');
 		/** @type { { caller: CallerType; states: State<unknown>[] }[] } 呼び出し元のリスト */
 		const callerList = [];
 
@@ -1224,10 +1335,10 @@ class GenStatePlaceholderNode extends GenStateNode {
 	 * @protected
 	 * @param { Context } ctx ノードを生成する場所
 	 * @param { HTMLElement | Text | undefined } target マウント対象のDOMノード
-	 * @returns { { node: StateNode; children: { node: GenStateNode; ctx: Context }[] } }
+	 * @returns { BuildCurrentResultType }
 	 */
 	buildCurrentImpl(ctx, target) {
-		const element = document.createTextNode('');
+		const element = ctx.window.document.createTextNode('');
 		return { node: new StatePlaceholderNode(element), children: [] };
 	}
 }
@@ -1292,12 +1403,12 @@ class GenStateHTMLElement extends GenStateNode {
 	 * @protected
 	 * @param { Context } ctx ノードを生成する場所
 	 * @param { HTMLElement | Text | undefined } target マウント対象のDOMノード
-	 * @returns { { node: StateNode; children: { node: GenStateNode; ctx: Context }[] } }
+	 * @returns { BuildCurrentResultType }
 	 */
 	buildCurrentImpl(ctx, target) {
 		// ノードのチェック
 		if (target) {
-			if (target instanceof Text) {
+			if (target.nodeType === ctx.window.Node.TEXT_NODE) {
 				throw new Error('\'target\' must be an HTMLElement.');
 			}
 			else if (target.tagName.toLowerCase() !== this.#element.tagName.toLowerCase()) {
@@ -1305,22 +1416,17 @@ class GenStateHTMLElement extends GenStateNode {
 			}
 		}
 
-		const element = this.#element.cloneNode(true);
-
-		if (target) {
+		if (target && target !== this.#element) {
 			// 属性を移動
-			for (const attribute of target.attributes) {
-				if (!element.hasAttribute(attribute.name)) {
-					element.setAttribute(attribute.name, attribute.value);
+			for (const attribute of this.#element.attributes) {
+				if (!target.hasAttribute(attribute.name)) {
+					target.setAttribute(attribute.name, attribute.value);
 				}
 			}
-			// 親ノードが存在すれば置換
-			if (target.parentNode) {
-				target.parentNode.replaceChild(element, target);
-			}
+			return { node: new StateHTMLElement(target), children: [] };
 		}
 
-		return { node: new StateHTMLElement(element), children: [] };
+		return { node: new StateHTMLElement(this.#element), children: [] };
 	}
 }
 
@@ -1399,7 +1505,7 @@ class GenStateDomNode extends GenStateNode {
 	 * @protected
 	 * @param { Context } ctx ノードを生成する場所
 	 * @param { HTMLElement | Text | undefined } target マウント対象のDOMノード
-	 * @returns { { node: StateNode; children: { node: GenStateNode; ctx: Context }[] } }
+	 * @returns { BuildCurrentResultType }
 	 */
 	buildCurrentImpl(ctx, target) {
 		// 観測を行う同一ノードの2回以上の生成は禁止
@@ -1409,7 +1515,7 @@ class GenStateDomNode extends GenStateNode {
 
 		// ノードのチェック
 		if (target) {
-			if (target instanceof Text) {
+			if (target.nodeType === ctx.window.Node.TEXT_NODE) {
 				throw new Error('\'target\' must be an HTMLElement.');
 			}
 			else if (target.tagName.toLowerCase() !== this.#tag.toLowerCase()) {
@@ -1418,7 +1524,7 @@ class GenStateDomNode extends GenStateNode {
 		}
 
 		// DOMノードの生成
-		const element = target ?? document.createElement(this.#tag);
+		const element = target ?? ctx.window.document.createElement(this.#tag);
 
 		/** @type { { caller: CallerType; states: State<unknown>[] }[] } 呼び出し元のリスト */
 		const callerList = [];
@@ -1470,8 +1576,11 @@ class GenStateDomNode extends GenStateNode {
 						ctx.notifyFunctionDelivery();
 					}
 					// その他プロパティはそのまま設定する
-					else {
+					else if (key in element) {
 						element[key] = val ?? '';
+					}
+					else {
+						element.setAttribute(key, val ?? '');
 					}
 				}, domUpdateLabel);
 				if (caller && caller.states.length > 0) callerList.push(caller);
@@ -1671,14 +1780,20 @@ class StateComponent extends StateNode {
 
 	/**
 	 * コンポーネントを構築する
+	 * @param { HTMLElement | Text | undefined } target マウント対象のDOMノード
 	 * @param { K } component コンポーネントを示す関数
 	 * @param { CompPropTypes<K> } props プロパティ
 	 * @param { CompChildrenType<K> } children 子要素
 	 * @param { ObservableStates<K> | undefined } observableStates 観測する対象
 	 * @return { GenStateNode }
 	 */
-	build(component, props, children, observableStates) {
+	build(target, component, props, children, observableStates) {
 		this.#ctx.state.lock([this.#ctx.sideEffectLabel]);
+
+		// コンポーネントを示す関数内でDOMノードを参照できるようにセットアップする
+		if (target?.nodeType === this.#ctx.window.Node.ELEMENT_NODE) {
+			this.node = new StateHTMLElement(target);
+		}
 
 		// ノードの生成
 		try {
@@ -1811,7 +1926,7 @@ class GenStateComponent extends GenStateNode {
 	 * @protected
 	 * @param { Context } ctx ノードを生成する場所
 	 * @param { HTMLElement | Text | undefined } target マウント対象のDOMノード
-	 * @returns { { node: StateNode; children: { node: GenStateNode; ctx: Context }[] } }
+	 * @returns { BuildCurrentResultType }
 	 */
 	buildCurrentImpl(ctx, target) {
 		// 観測を行う同一ノードの2回以上の生成は禁止
@@ -1836,7 +1951,9 @@ class GenStateComponent extends GenStateNode {
 		}
 
 		// コンポーネントを構築して返す
-		const gen = node.build(this.component, compProps, this.children, this.observableStates);
+		node.ctx.genStateNode = this;
+		const gen = node.build(target, this.component, compProps, this.children, this.observableStates);
+		node.ctx.genStateNode = undefined;
 		this.#genFlag = true;
 
 		return { node, children: [{ node: gen, ctx: node.ctx }] };
@@ -1885,17 +2002,23 @@ class StateAsyncComponent extends StateComponent {
 
 	/**
 	 * コンポーネントを構築する
+	 * @param { HTMLElement | Text | undefined } target マウント対象のDOMノード
 	 * @param { K } component コンポーネントを示す関数
 	 * @param { CompPropTypes<K> } props プロパティ
 	 * @param { CompChildrenType<K> } children 子要素
 	 * @param { ObservableStates<K> | undefined } observableStates 観測する対象
 	 * @return {{ gen: GenStateNode; children: GenStateNode[] }}
 	 */
-	build(component, props, children, observableStates) {
+	build(target, component, props, children, observableStates) {
 		this.ctx.state.lock([this.ctx.sideEffectLabel]);
 
 		// コンポーネントの構築を行う関数
 		const buildAsyncComponent = async () => {
+			// コンポーネントを示す関数内でDOMノードを参照できるようにセットアップする
+			if (target?.nodeType === this.ctx.window.Node.ELEMENT_NODE) {
+				this.node = new StateHTMLElement(target);
+			}
+
 			try {
 				this.genStateNode = await this.ctx.buildAsyncComponent(component, props, children, observableStates);
 			}
@@ -2020,7 +2143,7 @@ class GenStateAsyncComponent extends GenStateComponent {
 /**
  * @template { string | ComponentType<K> } K
  * @typedef { K extends string
- * 		? (GenStateNode | Text | CtxValueType<string> | GenStateNodeSet)[]
+ * 		? (GenStateNode | CtxValueType<string> | GenStateNodeSet)[]
  * 		: Parameters<K>[2] extends undefined ? [] : TransformGenStateNodeToCtxChildType<Parameters<K>[2]>
  * } CtxChildType コンテキスト上での子要素の型
  */
@@ -2033,8 +2156,8 @@ class GenStateAsyncComponent extends GenStateComponent {
 /**
  * @template { unknown[] } T
  * @typedef {{
- * 		[K in keyof T]: T[K] extends GenStateTextNode ? (Text | CtxValueType<string>)
- * 		: T[K] extends GenStateNode ? (GenStateNode | Text | CtxValueType<string>) : T[K];
+ * 		[K in keyof T]: T[K] extends GenStateTextNode ? CtxValueType<string>
+ * 		: T[K] extends GenStateNode ? (GenStateNode | CtxValueType<string>) : T[K];
  * }} TransformGenStateNodeToCtxChildType GenStateNodeからコンテキスト上の子要素の型へ変換
  */
 
@@ -2379,6 +2502,8 @@ class StateContext {
  * コンポーネントのためのコンテキスト
  */
 class Context {
+	/** @type { (typeof window) | import("jsdom").DOMWindow } ウィンドウインターフェース */
+	#window;
 	/** @type { LifeCycle } コンポーネントに設置されたライフサイクル */
 	#lifecycle = {};
 	/** @type { StateComponent<unknown> | undefined } コンテキストが属するコンポーネント */
@@ -2389,6 +2514,8 @@ class Context {
 	#stateCtx;
 	/** @type { SuspenseContext } Suspenseのコンテキスト */
 	#suspenseCtx;
+	/** @type { GenStateNode | undefined } 現在構築中のStateNodeに関する生成元 */
+	genStateNode = undefined;
 
 	/** @type { DomUpdateLabel | undefined } DOM更新の際に用いるラベル */
 	#domUpdateLabel = undefined;
@@ -2400,11 +2527,13 @@ class Context {
 
 	/**
 	 * コンストラクタ
+	 * @param { (typeof window) | import("jsdom").DOMWindow } window ウィンドウインターフェース
 	 * @param { DomUpdateController | undefined } domUpdateController DOMの更新のためのコントローラ
 	 * @param { StateContext | undefined } stateCtx Suspenseのコンテキスト
 	 * @param { SuspenseContext | undefined } suspenseCtx Suspenseのコンテキスト
 	 */
-	constructor(domUpdateController = undefined, stateCtx = undefined, suspenseCtx = undefined) {
+	constructor(window, domUpdateController = undefined, stateCtx = undefined, suspenseCtx = undefined) {
+		this.#window = window;
 		this.#domUpdateController = domUpdateController ?? new DomUpdateController();
 		this.#stateCtx = stateCtx ?? new StateContext();
 		this.#suspenseCtx = suspenseCtx ?? new SuspenseContext();
@@ -2416,7 +2545,7 @@ class Context {
 	 * @returns { Context }
 	 */
 	generateContextForComponent(gen) {
-		const ctx = new Context(this.#domUpdateController, this.#stateCtx, this.#suspenseCtx);
+		const ctx = new Context(this.#window, this.#domUpdateController, this.#stateCtx, this.#suspenseCtx);
 		ctx.#component = gen(ctx);
 		return ctx;
 	}
@@ -2427,7 +2556,7 @@ class Context {
 	 * @returns { Context }
 	 */
 	generateContextForSuspense(suspenseCtx) {
-		const ctx = new Context(this.#domUpdateController, this.#stateCtx, suspenseCtx);
+		const ctx = new Context(this.#window, this.#domUpdateController, this.#stateCtx, suspenseCtx);
 		ctx.#lifecycle = this.#lifecycle;
 		ctx.#component = this.#component;
 		ctx.#domUpdateLabel = this.#domUpdateLabel;
@@ -2435,6 +2564,12 @@ class Context {
 		ctx.#functionDeliveryFlag = this.#functionDeliveryFlag;
 		return ctx;
 	}
+
+	/**
+	 * ウィンドウインターフェースの取得
+	 * @returns { (typeof window) | import("jsdom").DOMWindow }
+	 */
+	get window() { return this.#window; }
 
 	/**
 	 * コンテキストを示すコンポーネントの取得
@@ -2575,33 +2710,37 @@ class Context {
 	/**
 	 * onMount時のライフサイクルの設定
 	 * @param { () => unknown } callback onMount時に呼びだすコールバック
+	 * @param { CallerType['label'] } label ライフサイクルフックの振る舞いを決めるラベル
 	 */
-	onMount(callback) {
-		this.#onLifeCycle({ caller: callback, label: this.sideEffectLabel }, 'onMount');
+	onMount(callback, label = this.sideEffectLabel) {
+		this.#onLifeCycle({ caller: callback, label }, 'onMount');
 	}
 
 	/**
 	 * onUnmount時のライフサイクルの設定
 	 * @param { () => unknown } callback onUnmount時に呼びだすコールバック
+	 * @param { CallerType['label'] } label ライフサイクルフックの振る舞いを決めるラベル
 	 */
-	onUnmount(callback) {
-		this.#onLifeCycle({ caller: callback, label: this.sideEffectLabel }, 'onUnmount');
+	onUnmount(callback, label = this.sideEffectLabel) {
+		this.#onLifeCycle({ caller: callback, label }, 'onUnmount');
 	}
 
 	/**
 	 * onBeforeUpdate時のライフサイクルの設定
 	 * @param { () => unknown } callback onBeforeUpdate時に呼びだすコールバック
+	 * @param { CallerType['label'] } label ライフサイクルフックの振る舞いを決めるラベル
 	 */
-	onBeforeUpdate(callback) {
-		this.#onLifeCycle({ caller: callback, label: this.sideEffectLabel }, 'onBeforeUpdate');
+	onBeforeUpdate(callback, label = this.sideEffectLabel) {
+		this.#onLifeCycle({ caller: callback, label }, 'onBeforeUpdate');
 	}
 
 	/**
 	 * onAfterUpdate時のライフサイクルの設定
 	 * @param { () => unknown } callback onAfterUpdate時に呼びだすコールバック
+	 * @param { CallerType['label'] } label ライフサイクルフックの振る舞いを決めるラベル
 	 */
-	onAfterUpdate(callback) {
-		this.#onLifeCycle({ caller: callback, label: this.sideEffectLabel }, 'onAfterUpdate');
+	onAfterUpdate(callback, label = this.sideEffectLabel) {
+		this.#onLifeCycle({ caller: callback, label }, 'onAfterUpdate');
 	}
 
 	/**
@@ -2720,9 +2859,6 @@ function normalizeCtxChild(nodeList) {
 		}
 		else if (typeof e === 'string') {
 			return new GenStateTextNode(e);
-		}
-		else if (e instanceof Text) {
-			return new GenStateTextNode(e.data);
 		}
 		else {
 			return e;
@@ -2946,6 +3082,7 @@ function createWrapperFunctionWithLazy(f, component) {
 }
 
 export {
+	CommonLabel,
 	IState,
 	State,
 	StateNode,
