@@ -1,4 +1,4 @@
-import { CommonLabel, Context, State, useState } from "../../../src/core.js";
+import { CommonLabel, IState, Context, State, useState } from "../../../src/core.js";
 
 /** onMountを即時評価するためのラベル */
 const onMountLabel = new CommonLabel();
@@ -7,12 +7,12 @@ const onMountLabel = new CommonLabel();
  * 
  * @template T, R
  * @param { Context } ctx 
+ * @param { IState<unknown>[] | IState<unknown> } watchState callbackを再度呼びだすトリガーとなる状態変数
  * @param { () => Promise<T> } callback jsonを生成するコールバック
  * @param { (json: T) => R } transform jsonを状態変数として持つオブジェクトに変換をする関数
  * @returns { State<R | undefined> }
  */
-function useSSRData(ctx, callback, transform = x => x) {
-	const element = ctx.component?.element;
+function useSSRData(ctx, watchState, callback, transform = x => x) {
 	/** @type { State<R | undefined> } */
 	const state = useState(ctx, undefined);
 
