@@ -1088,7 +1088,7 @@ class StateNodeSet {
 				yield nestedNode;
 			}
 			else {
-				yield* nestedNode.node();
+				yield* nestedNode.nodeSet();
 			}
 		}
 	}
@@ -1536,6 +1536,8 @@ class GenStateDomNode extends GenStateNode {
 		for (const key in this.#props) {
 			const val = this.#props[key];
 			if (val !== undefined && val !== null && val !== false) {
+				/** @type { boolean | undefined } 属性として設定を行うかのフラグ */
+				let attrFlag = undefined;
 				const caller = setParam(val, val => {
 					// 属性とプロパティで動作に差異のある対象の設定
 					const lowerTag = this.#tag.toLowerCase();
@@ -1569,18 +1571,49 @@ class GenStateDomNode extends GenStateNode {
 							element.setAttribute(key, val);
 						}
 					}
-					// 関数を設定する場合はエラーハンドリングを行うようにする
-					else if (val instanceof Function) {
-						element[key] = createWrapperFunctionWithLazy(val, ctx.component);
-						// コンポーネントへ副作用が生じる可能性のある処理が伝播されることを通知する
-						ctx.notifyFunctionDelivery();
-					}
-					// その他プロパティはそのまま設定する
-					else if (key in element) {
-						element[key] = val ?? '';
-					}
 					else {
-						element.setAttribute(key, val ?? '');
+						if (attrFlag === undefined) {
+							// プロトタイプを走査して書き込み可能なプロパティが存在するかを確認する
+							let proto = Object.getPrototypeOf(element);
+							while (proto) {
+								const desc = Object.getOwnPropertyDescriptor(proto, key);
+								if (desc) {
+									attrFlag = !!(desc.writable || (!desc.set && desc.get));
+									break;
+								}
+								proto = Object.getPrototypeOf(proto);
+							}
+							attrFlag = attrFlag ?? true;
+						}
+						if (attrFlag) {
+							// 属性に設定する
+							if (val) {
+								if (val instanceof Function) {
+									// 関数を設定する場合はエラーハンドリングを行うようにする
+									element.setAttribute(key, createWrapperFunctionWithLazy(val, ctx.component));
+									// コンポーネントへ副作用が生じる可能性のある処理が伝播されることを通知する
+									ctx.notifyFunctionDelivery();
+								}
+								else {
+									element.setAttribute(key, val);
+								}
+							}
+							else {
+								element.removeAttribute(key);
+							}
+						}
+						else {
+							// プロパティに設定する
+							if (val instanceof Function) {
+								// 関数を設定する場合はエラーハンドリングを行うようにする
+								element[key] = createWrapperFunctionWithLazy(val, ctx.component);
+								// コンポーネントへ副作用が生じる可能性のある処理が伝播されることを通知する
+								ctx.notifyFunctionDelivery();
+							}
+							else {
+								element[key] = val ?? '';
+							}
+						}
 					}
 				}, domUpdateLabel);
 				if (caller && caller.states.length > 0) callerList.push(caller);
@@ -2827,20 +2860,20 @@ function watch(ctx, state, f) {
 		let nextState = state.value;
 
 		/** @type { CallerType } */
-		const caller =
-		// コンポーネントが有効な場合はエラーハンドリングを実施
-		{ caller: () => {
-			prevState = nextState;
-			nextState = state.value;
-			return f(prevState, nextState);
-		}, label };
-		state.add(caller);
+		const caller = {
+			caller: () => {
+				prevState = nextState;
+				nextState = state.value;
+				return f(prevState, nextState);
+			}, label
+		};
+		(state instanceof State || state instanceof Computed) && state.add(caller);
 		return caller;
 	}
 	else {
 		/** @type { CallerType } */
 		const caller = { caller: f, label };
-		state.forEach(s => s.add(caller));
+		state.forEach(s => (s instanceof State || s instanceof Computed) && s.add(caller));
 		return caller;
 	}
 }
