@@ -3114,6 +3114,17 @@ function createWrapperFunctionWithLazy(f, component) {
 	)
 }
 
+/**
+ * 文字列をStateNodeSetに変換する
+ * @param { Context } ctx 
+ * @param { string } text 
+ */
+function textToStateNodeSet(ctx, text) {
+	const div = ctx.window.document.createElement('div');
+	div.innerHTML = text;
+	return new GenStateNodeSet([...div.childNodes].map(child => html(child)));
+}
+
 export {
 	CommonLabel,
 	IState,
@@ -3139,5 +3150,6 @@ export {
 	normalizeCtxProps,
 	$,
 	t,
-	html
+	html,
+	textToStateNodeSet
 };
