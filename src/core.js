@@ -890,7 +890,6 @@ class GenStateNode {
 							// テキストノードもしくはplaceholderであれば挿入して補完する
 							if (useChildNodes) {
 								element.insertBefore(node.element, childNode);
-								++cnt;
 							}
 						}
 						else {
@@ -905,7 +904,7 @@ class GenStateNode {
 					}
 				}
 				// 子要素が多すぎたかの評価
-				if (useChildNodes && cnt < childNodes.length) {
+				if (useChildNodes && cnt + 1 < childNodes.length) {
 					throw new Error('The number of nodes is excessive.');
 				}
 			}
