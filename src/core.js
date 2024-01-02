@@ -1537,11 +1537,11 @@ class GenStateDomNode extends GenStateNode {
 
 		// プロパティの設定
 		for (const key in this.#props) {
-			const val = this.#props[key];
-			if (val !== undefined && val !== null && val !== false) {
+			const _val = this.#props[key];
+			if (_val !== undefined && _val !== null && _val !== false) {
 				/** @type { boolean | undefined } 属性として設定を行うかのフラグ */
 				let attrFlag = undefined;
-				const caller = setParam(val, val => {
+				const caller = setParam(_val, val => {
 					// 属性とプロパティで動作に差異のある対象の設定
 					const lowerTag = this.#tag.toLowerCase();
 					// styleはオブジェクト型による設定を許容するため処理を特殊化
@@ -1591,7 +1591,7 @@ class GenStateDomNode extends GenStateNode {
 						if (attrFlag) {
 							// 属性に設定する
 							if (val) {
-								if (val instanceof Function) {
+								if (_val instanceof Function) {
 									// 関数を設定する場合はエラーハンドリングを行うようにする
 									element.setAttribute(key, createWrapperFunctionWithLazy(val, ctx.component));
 									// コンポーネントへ副作用が生じる可能性のある処理が伝播されることを通知する
@@ -1607,7 +1607,7 @@ class GenStateDomNode extends GenStateNode {
 						}
 						else {
 							// プロパティに設定する
-							if (val instanceof Function) {
+							if (_val instanceof Function) {
 								// 関数を設定する場合はエラーハンドリングを行うようにする
 								element[key] = createWrapperFunctionWithLazy(val, ctx.component);
 								// コンポーネントへ副作用が生じる可能性のある処理が伝播されることを通知する
