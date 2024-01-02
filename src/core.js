@@ -300,7 +300,10 @@ class State extends IState {
 	 * 明示的に呼び出し元情報を追加する
 	 * @param { CallerType } caller 呼び出し元の関数
 	 */
-	add(caller) { this.#callerList.add(caller); }
+	add(caller) {
+		this.#ctx.notify(this);
+		this.#callerList.add(caller);
+	}
 
 	/**
 	 * 明示的に呼び出し元情報を削除する
@@ -2475,11 +2478,11 @@ class StateContext {
 	 */
 	notify(state) {
 		if (this.#stack.length > 0) {
-			if (!this.#noreference[0] && (state.onreference instanceof Function)) {
-				// 参照追加に関するイベントの発火
-				state.onreference(state);
-			}
 			this.#stack[this.#stack.length - 1].states.push(state);
+		}
+		if (!this.#noreference[0] && (state.onreference instanceof Function)) {
+			// 参照追加に関するイベントの発火
+			state.onreference(state);
 		}
 	}
 
