@@ -1593,7 +1593,7 @@ class GenStateDomNode extends GenStateNode {
 							if (val) {
 								if (_val instanceof Function) {
 									// 関数を設定する場合はエラーハンドリングを行うようにする
-									element.setAttribute(key, createWrapperFunctionWithLazy(val, ctx.component));
+									element.setAttribute(key, createWrapperFunction(val, ctx.component));
 									// コンポーネントへ副作用が生じる可能性のある処理が伝播されることを通知する
 									ctx.notifyFunctionDelivery();
 								}
@@ -1609,7 +1609,7 @@ class GenStateDomNode extends GenStateNode {
 							// プロパティに設定する
 							if (_val instanceof Function) {
 								// 関数を設定する場合はエラーハンドリングを行うようにする
-								element[key] = createWrapperFunctionWithLazy(val, ctx.component);
+								element[key] = createWrapperFunction(val, ctx.component);
 								// コンポーネントへ副作用が生じる可能性のある処理が伝播されることを通知する
 								ctx.notifyFunctionDelivery();
 							}
@@ -2932,7 +2932,7 @@ function normalizeCtxProps(component, props, stateComponent = undefined) {
 				const val2 = val === undefined ? component.propTypes[key] : val;
 				// 関数ならばcreateWrapperFunctionWithLazyで副作用を捕捉する
 				if (val2 instanceof Function) {
-					compProps[key] = new NotState(createWrapperFunctionWithLazy(val2, stateComponent));
+					compProps[key] = new NotState(createWrapperFunction(val2, stateComponent));
 					// コンポーネントへ副作用が生じる可能性のある処理が伝播されることを通知する
 					stateComponent.ctx.notifyFunctionDelivery();
 				}
@@ -3091,38 +3091,6 @@ function createWrapperFunction(f, component) {
 			component.onErrorCaptured(e, component);
 		}
 	}
-}
-
-/**
- * 遅延評価付きエラーハンドリングを行うようにラップした関数を生成する
- * @template { Function } T
- * @template { ComponentType<K> } K
- * @param { T } f ラップ対象の関数
- * @param { StateComponent<K> } component エラーハンドリング対象のコンポーネント
- */
-function createWrapperFunctionWithLazy(f, component) {
-	return createWrapperFunction(
-		/**
-		 * @param { Parameters<T> } args
-		 * @returns { ReturnType<T> }
-		 */
-		(...args) => {
-			const ctx = component.ctx;
-			// 関数内で生じたすべての状態の更新の伝播を取り出す
-			const { ret, caller } = ctx.state.lazy(() => f(...args));
-			if (caller.size > 0) {
-				// fの変更によるラベルなしの伝播は副作用として扱わずそのまま評価する
-				if (caller.has(undefined)) {
-					caller.get(undefined).forEach(c => c());
-					caller.delete(undefined);
-				}
-				// fの変更による状態の更新の伝播は副作用として扱う
-				const caller2 = () => caller.forEach((callerList, label) => ctx.state.update2(callerList, label));
-				ctx.state.update2([caller2], ctx.sideEffectLabel);
-			}
-			return ret;
-		}, component
-	)
 }
 
 /**
