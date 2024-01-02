@@ -254,6 +254,7 @@ class State extends IState {
 	}
 
 	get value() {
+		this.#ctx.onreference(this);
 		// 呼び出し元が有効なら追加する
 		const current = this.#ctx.current;
 		if (current && !this.#callerList.has(current.caller)) {
@@ -301,7 +302,7 @@ class State extends IState {
 	 * @param { CallerType } caller 呼び出し元の関数
 	 */
 	add(caller) {
-		this.#ctx.notify(this);
+		this.#ctx.onreference(this);
 		this.#callerList.add(caller);
 	}
 
@@ -2480,6 +2481,14 @@ class StateContext {
 		if (this.#stack.length > 0) {
 			this.#stack[this.#stack.length - 1].states.push(state);
 		}
+	}
+
+	/**
+	 * 状態変数の参照の通知
+	 * @template T
+	 * @param { State<T> } state 通知対象の状態変数
+	 */
+	onreference(state) {
 		if (!this.#noreference[0] && (state.onreference instanceof Function)) {
 			// 参照追加に関するイベントの発火
 			state.onreference(state);
