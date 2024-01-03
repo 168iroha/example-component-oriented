@@ -42,9 +42,22 @@ class ShowStateNodeSet extends StateNodeSet {
 				const flag = props.test.value === undefined || props.test.value(next);
 				// キャッシュヒットの検査
 				const cache = props.cache.value ?? false;
-				const genStateNodeSet = (cache ? this.#cache : undefined) ?? new GenStateNodeSet(normalizeCtxChild(flag ? gen(next) : [new GenStatePlaceholderNode()]));
+				const genStateNodeSet = (() => {
+					const set = cache ? this.#cache : undefined;
+					if (set) {
+						return set;
+					}
+					else {
+						const genList = normalizeCtxChild(normalizeCtxChild(flag ? gen(next) : [new GenStatePlaceholderNode()]));
+						return new GenStateNodeSet(genList.length === 0 ? [new GenStatePlaceholderNode()] : genList);
+					}
+				})();
 				let callback = undefined;
 				ctx.component?.onBeforeUpdate?.();
+				const locked = ctx.state.locked(ctx.sideEffectLabel);
+				if (!locked) {
+					ctx.state.lock([ctx.sideEffectLabel]);
+				}
 				let promise = undefined;
 				if (genStateNodeSet instanceof GenStateNodeSet) {
 					// 表示する要素が存在しないときは代わりにplaceholderを設置
@@ -79,7 +92,13 @@ class ShowStateNodeSet extends StateNodeSet {
 				else {
 					promise = callback();
 				}
-				promise.then(() => ctx.component?.onAfterUpdate?.());
+				promise.then(() => {
+					if (!locked) {
+						// DOMツリー構築に関する非同期処理解決まで処理を遅延する
+						ctx.state.unlock([ctx.sideEffectLabel])();
+					}
+					ctx.component?.onAfterUpdate?.();
+				});
 			}
 		});
 		if (caller) {
@@ -98,7 +117,8 @@ class ShowStateNodeSet extends StateNodeSet {
 			const val = props.target.value;
 			const flag = val !== undefined && (props.test.value === undefined || props.test.value(val));
 			// 表示する要素が存在しないときは代わりにplaceholderを設置
-			const { set, sibling: sibling_ } = (new GenStateNodeSet(normalizeCtxChild(flag ? gen(val) : [new GenStatePlaceholderNode()]))).buildStateNodeSet(ctx);
+			const genList = normalizeCtxChild(normalizeCtxChild(flag ? gen(val) : [new GenStatePlaceholderNode()]));
+			const { set, sibling: sibling_ } = (new GenStateNodeSet(genList.length === 0 ? [new GenStatePlaceholderNode()] : genList)).buildStateNodeSet(ctx);
 			this.nestedNodeSet = [set];
 			sibling.push(...sibling_);
 			if (flag && (props.cache.value ?? false)) {
@@ -257,6 +277,10 @@ class WhenStateNodeSet extends StateNodeSet {
 					const cancellable = (this.#prevChooseIndex >= 0 ? nestedNodeSet[this.#prevChooseIndex].props.cancellable.value : undefined) ?? props.cancellable.value;
 					let callback = undefined;
 					ctx.component?.onBeforeUpdate?.();
+					const locked = ctx.state.locked(ctx.sideEffectLabel);
+					if (!locked) {
+						ctx.state.lock([ctx.sideEffectLabel]);
+					}
 					if (genStateNodeSet instanceof GenStateNodeSet) {
 						// ノードを構築
 						const { set, sibling } = genStateNodeSet.buildStateNodeSet(ctx);
@@ -282,7 +306,13 @@ class WhenStateNodeSet extends StateNodeSet {
 					// 全てのページ生成の解決後にキャプチャした非同期処理の解決をする
 					const fallthrough = (this.#prevChooseIndex >= 0 ? nestedNodeSet[this.#prevChooseIndex].props.fallthrough.value : undefined) ?? props.fallthrough.value;
 					const node = switchingPage.node;
-					const promise = (fallthrough ? ctx.capture(callback, cancellable) : callback()).then(() => ctx.component?.onAfterUpdate?.());
+					const promise = (fallthrough ? ctx.capture(callback, cancellable) : callback()).then(() => {
+						if (!locked) {
+							// DOMツリー構築に関する非同期処理解決まで処理を遅延する
+							ctx.state.unlock([ctx.sideEffectLabel])();
+						}
+						ctx.component?.onAfterUpdate?.();
+					});
 					if (!cache) {
 						promise.then(() => node.remove());
 					}
@@ -382,13 +412,20 @@ class WhenStateNodeSet extends StateNodeSet {
 			const set = this.#cacheTable[i];
 			if (cache) {
 				// キャッシュが存在すればそのまま返す/存在しなければ結果をキャッシュする
-				return set ?? (new GenStateNodeSet(normalizeCtxChild(nestedNodeSet[i].gen(val)))).getStateNodeSet(s => this.#cacheTable[i] = s);
+				if (set) {
+					return set;
+				}
+				else {
+					const genList = normalizeCtxChild(nestedNodeSet[i].gen(val));
+					return (new GenStateNodeSet(genList.length === 0 ? [new GenStatePlaceholderNode()] : genList)).getStateNodeSet(s => this.#cacheTable[i] = s)
+				}
 			}
 			else {
 				if (set) {
 					this.#cacheTable[i] = undefined;
 				}
-				return new GenStateNodeSet(normalizeCtxChild(nestedNodeSet[i].gen(val)));
+				const genList = normalizeCtxChild(nestedNodeSet[i].gen(val));
+				return new GenStateNodeSet(genList.length === 0 ? [new GenStatePlaceholderNode()] : genList);
 			}
 		}
 		return undefined;

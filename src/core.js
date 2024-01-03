@@ -2435,6 +2435,15 @@ class StateContext {
 	}
 
 	/**
+	 * ラベルについてロックされているか調べる
+	 * @param { ICallerLabel } label ラベル
+	 * @returns 
+	 */
+	locked(label) {
+		return this.#lockCaller.has(label);
+	}
+
+	/**
 	 * ロックされた対象のカウントを得る
 	 * @param { ICallerLabel } label カウントを得るラベル
 	 */
