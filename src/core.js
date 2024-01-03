@@ -2546,7 +2546,7 @@ class StateContext {
  * コンポーネントのためのコンテキスト
  */
 class Context {
-	/** @type { (typeof window) | import("jsdom").DOMWindow } ウィンドウインターフェース */
+	/** @type { typeof window } ウィンドウインターフェース */
 	#window;
 	/** @type { LifeCycle } コンポーネントに設置されたライフサイクル */
 	#lifecycle = {};
@@ -2571,7 +2571,7 @@ class Context {
 
 	/**
 	 * コンストラクタ
-	 * @param { (typeof window) | import("jsdom").DOMWindow } window ウィンドウインターフェース
+	 * @param { typeof window } window ウィンドウインターフェース
 	 * @param { DomUpdateController | undefined } domUpdateController DOMの更新のためのコントローラ
 	 * @param { StateContext | undefined } stateCtx Suspenseのコンテキスト
 	 * @param { SuspenseContext | undefined } suspenseCtx Suspenseのコンテキスト
@@ -2611,7 +2611,7 @@ class Context {
 
 	/**
 	 * ウィンドウインターフェースの取得
-	 * @returns { (typeof window) | import("jsdom").DOMWindow }
+	 * @returns { typeof window }
 	 */
 	get window() { return this.#window; }
 
