@@ -645,6 +645,14 @@ class StateNode {
 	detach() {
 		this.element?.remove();
 	}
+
+	/**
+	 * ノードの関連付けの開放
+	 */
+	free() {
+		this.callerList.forEach(caller => caller.states.forEach(s => s.delete(caller.caller)));
+		this.callerList = [];
+	}
 }
 
 /**
@@ -1130,6 +1138,15 @@ class StateNodeSet {
 	detach() {
 		for (const node of this.nodeSet()) {
 			node.detach();
+		}
+	}
+
+	/**
+	 * ノードの関連付けの開放
+	 */
+	free() {
+		for (const node of this.nodeSet()) {
+			node.free();
 		}
 	}
 }
@@ -1637,9 +1654,7 @@ class GenStateDomNode extends GenStateNode {
 
 		// 観測の評価
 		if (this.#observableStates) {
-			ctx.state.update2([() => {
-				this.#observeImpl(ctx, this.#observableStates, element);
-			}]);
+			this.#observeImpl(ctx, this.#observableStates, element);
 		}
 
 		this.#genFlag = true;
@@ -1833,7 +1848,7 @@ class StateComponent extends StateNode {
 
 		// ノードの生成
 		try {
-			this.genStateNode = this.#ctx.buildComponent(component, props, children, observableStates);
+			this.genStateNode = this.#ctx.buildComponent(component, props, children, observableStates, this.callerList);
 		}
 		catch (e) {
 			// 状態変数の関連付けを破棄してから例外をリスロー
@@ -2056,7 +2071,7 @@ class StateAsyncComponent extends StateComponent {
 			}
 
 			try {
-				this.genStateNode = await this.ctx.buildAsyncComponent(component, props, children, observableStates);
+				this.genStateNode = await this.ctx.buildAsyncComponent(component, props, children, observableStates, this.callerList);
 			}
 			catch (e) {
 				// 状態変数の関連付けを破棄してから例外をリスロー
@@ -2692,9 +2707,10 @@ class Context {
 	 * @template { ComponentType<K> } K
 	 * @param { ReturnType<K> } compResult コンポーネントを示す関数の実行結果
 	 * @param { ObservableStates<K> | undefined } observableStates 観測する対象
+	 * @param { { caller: CallerType; states: State<unknown>[] }[] } callerList 呼び出し元のリスト
 	 * @returns { GenStateComponent }
 	 */
-	#buildComponentImpl(compResult, observableStates) {
+	#buildComponentImpl(compResult, observableStates, callerList) {
 		if (compResult instanceof GenStateNode) {
 			return compResult;
 		}
@@ -2706,7 +2722,8 @@ class Context {
 					const state = observableStates[key];
 					const exposeState = exposeStates[key];
 					// 状態の観測の実施
-					state.observe(exposeState);
+					const caller = state.observe(exposeState);
+					if (caller && caller.states.length > 0) callerList.push(caller);
 				}
 			}
 
@@ -2721,10 +2738,11 @@ class Context {
 	 * @param { CompPropTypes<K> } props プロパティ
 	 * @param { GenStateNode[] } children 子要素
 	 * @param { ObservableStates<K> | undefined } observableStates 観測する対象
+	 * @param { { caller: CallerType; states: State<unknown>[] }[] } callerList 呼び出し元のリスト
 	 * @returns {{ getStateNode: GenStateNode; exposeStates: ComponentExposeStates<K> }}
 	 */
-	buildComponent(component, props, children, observableStates) {
-		return this.#buildComponentImpl(component(this, props, children), observableStates);
+	buildComponent(component, props, children, observableStates, callerList) {
+		return this.#buildComponentImpl(component(this, props, children), observableStates, callerList);
 	}
 
 	/**
@@ -2734,10 +2752,11 @@ class Context {
 	 * @param { CompPropTypes<K> } props プロパティ
 	 * @param { GenStateNode[] } children 子要素
 	 * @param { ObservableStates<K> | undefined } observableStates 観測する対象
+	 * @param { { caller: CallerType; states: State<unknown>[] }[] } callerList 呼び出し元のリスト
 	 * @returns { Promise<{ getStateNode: GenStateNode; exposeStates: ComponentExposeStates<K> }> }
 	 */
-	async buildAsyncComponent(component, props, children, observableStates) {
-		return this.#buildComponentImpl(await component(this, props, children), observableStates);
+	async buildAsyncComponent(component, props, children, observableStates, callerList) {
+		return this.#buildComponentImpl(await component(this, props, children), observableStates, callerList);
 	}
 
 	/**

@@ -60,6 +60,9 @@ class ShowStateNodeSet extends StateNodeSet {
 				}
 				let promise = undefined;
 				if (genStateNodeSet instanceof GenStateNodeSet) {
+					// ノードは削除されるためリソースを開放しておく
+					switchingPage.node.free();
+
 					// 表示する要素が存在しないときは代わりにplaceholderを設置
 					const { set, sibling } = genStateNodeSet.buildStateNodeSet(ctx);
 					this.nestedNodeSet = [set];
@@ -75,7 +78,7 @@ class ShowStateNodeSet extends StateNodeSet {
 						}
 					}, localSuspenseCtx);
 					if (localSuspenseCtx.exists) {
-						callback = () => switchingPage.switching(async () => { await localSuspenseCtx.call(); return set; }, props.cancellable.value ?? true).then(() => localSuspenseCtx.resolve());
+						callback = () => switchingPage.switching(async () => { await localSuspenseCtx.call(); return set; }, props.cancellable.value ?? true).finally(() => localSuspenseCtx.resolve());
 					}
 					else {
 						callback = () => switchingPage.switching(set, props.cancellable.value ?? true);
@@ -274,6 +277,9 @@ class WhenStateNodeSet extends StateNodeSet {
 
 				// 選択対象もインデックスが変わらないときは遷移しない(Whent単体の場合は遷移する)
 				if (genStateNodeSet) {
+					// ノードは削除されるためリソースを開放しておく
+					switchingPage.node.free();
+
 					const cancellable = (this.#prevChooseIndex >= 0 ? nestedNodeSet[this.#prevChooseIndex].props.cancellable.value : undefined) ?? props.cancellable.value;
 					let callback = undefined;
 					ctx.component?.onBeforeUpdate?.();
@@ -293,7 +299,7 @@ class WhenStateNodeSet extends StateNodeSet {
 							}
 						}, localSuspenseCtx);
 						if (localSuspenseCtx.exists) {
-							callback = () => switchingPage.switching(async () => { await localSuspenseCtx.call(); return set; }, cancellable).then(() => localSuspenseCtx.resolve());
+							callback = () => switchingPage.switching(async () => { await localSuspenseCtx.call(); return set; }, cancellable).finally(() => localSuspenseCtx.resolve());
 						}
 						else {
 							callback = () => switchingPage.switching(set, cancellable);
@@ -305,17 +311,13 @@ class WhenStateNodeSet extends StateNodeSet {
 					}
 					// 全てのページ生成の解決後にキャプチャした非同期処理の解決をする
 					const fallthrough = (this.#prevChooseIndex >= 0 ? nestedNodeSet[this.#prevChooseIndex].props.fallthrough.value : undefined) ?? props.fallthrough.value;
-					const node = switchingPage.node;
-					const promise = (fallthrough ? ctx.capture(callback, cancellable) : callback()).then(() => {
+					(fallthrough ? ctx.capture(callback, cancellable) : callback()).then(() => {
 						if (!locked) {
 							// DOMツリー構築に関する非同期処理解決まで処理を遅延する
 							ctx.state.unlock([ctx.sideEffectLabel])();
 						}
 						ctx.component?.onAfterUpdate?.();
 					});
-					if (!cache) {
-						promise.then(() => node.remove());
-					}
 					switchingPage.afterSwitching = props.onAfterSwitching.value;
 					switchingPage.beforeSwitching = props.onBeforeSwitching.value;
 				}

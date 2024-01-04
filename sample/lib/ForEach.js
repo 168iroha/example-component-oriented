@@ -237,8 +237,9 @@ class VariableStateNodeSet extends StateNodeSet {
 		}
 		// ノードの削除
 		for (const { switching } of deleteNodeSet) {
-			const node = switching.node;
-			promiseList.push(switching.detach(cancellable).then(() => node.remove()));
+			// ノードは削除されるためリソースを開放しておく
+			switching.node.free();
+			promiseList.push(switching.detach(cancellable));
 		}
 		// 要素が存在しないときはplaceholderを設置
 		if (nodeSetList.length === 0) {
