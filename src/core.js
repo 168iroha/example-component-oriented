@@ -1635,11 +1635,11 @@ class GenStateDomNode extends GenStateNode {
 			}
 		}
 
-		// 観測の評価(状態の伝播元での副作用として扱う)
+		// 観測の評価
 		if (this.#observableStates) {
 			ctx.state.update2([() => {
 				this.#observeImpl(ctx, this.#observableStates, element);
-			}], ctx.sideEffectLabel);
+			}]);
 		}
 
 		this.#genFlag = true;
@@ -2699,17 +2699,15 @@ class Context {
 			return compResult;
 		}
 		else {
-			// 観測の評価(状態の伝播元での副作用として扱う)
+			// 観測の評価
 			if (observableStates) {
 				const exposeStates = compResult.exposeStates ?? {};
-				this.state.update2([() => {
-					for (const key in observableStates) {
-						const state = observableStates[key];
-						const exposeState = exposeStates[key];
-						// 状態の観測の実施
-						state.observe(exposeState, this.sideEffectLabel);
-					}
-				}], this.sideEffectLabel);
+				for (const key in observableStates) {
+					const state = observableStates[key];
+					const exposeState = exposeStates[key];
+					// 状態の観測の実施
+					state.observe(exposeState);
+				}
 			}
 
 			return compResult.node;
