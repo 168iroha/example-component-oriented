@@ -130,7 +130,7 @@ class ShowStateNodeSet extends StateNodeSet {
 
 			ctx.state.update([{ caller: () => {
 				const parent = this.first.element.parentElement;
-				const afterElement = this.last.element.nextElementSibling;
+				const afterElement = this.last.element.nextSibling;
 				const set = this.nestedNodeSet[0];
 				const page = this.first instanceof StateAsyncComponent ? async () => { await this.first.finished; return set; } : set;
 				switchingPage.afterSwitching = props.initSwitching.value ?? false ? switchingPage.afterSwitching : undefined;
@@ -342,7 +342,7 @@ class WhenStateNodeSet extends StateNodeSet {
 
 		ctx.state.update([{ caller: () => {
 			const parent = this.first.element.parentElement;
-			const afterElement = this.last.element.nextElementSibling;
+			const afterElement = this.last.element.nextSibling;
 			const set = this.nestedNodeSet[0];
 			const page = this.first instanceof StateAsyncComponent ? async () => { await this.first.finished; return set; } : set;
 			const initSwitching = (this.#prevChooseIndex >= 0 ? nestedNodeSet[this.#prevChooseIndex].props.initSwitching.value : undefined) ?? props.initSwitching.value;

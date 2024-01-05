@@ -936,7 +936,7 @@ class GenStateNode {
 						const ret = yield* this.#mountComponent(ctx, child, childNode, lockedLabelSet, waitFlag);
 						node = ret.node;
 						if (child instanceof GenStateAsyncComponent) {
-							// StateAsyncComponentの場合はplaceholderで保管されるため次のchildNodeへ移動しないようにする
+							// StateAsyncComponentの場合はplaceholderで補完されるため次のchildNodeへ移動しないようにする
 							parent.insertBefore(node.element, childNode);
 							continue;
 						}

@@ -194,7 +194,7 @@ class VariableStateNodeSet extends StateNodeSet {
 			const cancellable = props.cancellable.value;
 			for (const { set, switching } of this.#keyList.values()) {
 				const parent = set.first.element.parentElement;
-				const afterElement = set.last.element.nextElementSibling;
+				const afterElement = set.last.element.nextSibling;
 				switching.afterSwitching = props.initSwitching.value ? switching.afterSwitching : undefined;
 				switching.insertBefore(set, afterElement, parent, cancellable);
 				switching.afterSwitching = props.onAfterSwitching.value;
