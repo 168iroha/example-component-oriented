@@ -863,14 +863,15 @@ class GenStateNode {
 			while (queueNode.length > 0) {
 				/** @type { (typeof queueNode)[number] } */
 				const { children, element } = queueNode.shift();
+				if (children.length === 0) {
+					continue;
+				}
 				// 子要素の評価と取り出し
 				const childNodes = element?.childNodes ?? [];
-				if (children.length > 0) {
-					// nodeに子が設定されているときはElementノード以外を削除
-					for (const childNode of [...childNodes]) {
-						if (childNode.nodeType !== ctx.window.Node.ELEMENT_NODE) {
-							childNode.remove();
-						}
+				// nodeに子が設定されているときはElementノード以外を削除
+				for (const childNode of [...childNodes]) {
+					if (childNode.nodeType !== ctx.window.Node.ELEMENT_NODE) {
+						childNode.remove();
 					}
 				}
 				const useChildNodes = childNodes.length > 0;
@@ -3127,7 +3128,7 @@ function createWrapperFunction(f, component) {
 function textToStateNodeSet(ctx, text) {
 	const div = ctx.window.document.createElement('div');
 	div.innerHTML = text;
-	return new GenStateNodeSet([...div.childNodes].map(child => html(child)));
+	return new GenStateNodeSet([...div.childNodes].filter(child => child.nodeType === ctx.window.Node.ELEMENT_NODE).map(child => html(child)));
 }
 
 export {
