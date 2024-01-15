@@ -51,6 +51,14 @@ class VariableStateNodeSet extends StateNodeSet {
 				/** @type { Map<unknown, { set: StateNodeSet, switching: SwitchingPage; index: number }> } 変更後のノードの集合のキーのリスト */
 				const keyList = new Map();
 
+				if (element.parentElement) {
+					ctx.component?.onBeforeUpdate?.();
+				}
+				const locked = ctx.state.locked(ctx.sideEffectLabel);
+				if (!locked) {
+					ctx.state.lock([ctx.sideEffectLabel]);
+				}
+
 				/** @type { StateNodeSet[] } 挿入をするノードの全体 */
 				const nodeSetList = [];
 				// 挿入を行うノードの全体の構築
@@ -70,7 +78,8 @@ class VariableStateNodeSet extends StateNodeSet {
 							throw new Error(`Key ${key} is duplicated.`);
 						}
 						// 現在表示していない対象を表示する場合は構築する
-						const { set, sibling } = (new GenStateNodeSet(normalizeCtxChild(gen(e, key, props.key.value)))).buildStateNodeSet(ctx);
+						const genList = normalizeCtxChild(gen(e, key, props.key.value));
+						const { set, sibling } = (new GenStateNodeSet(genList.length === 0 ? [new GenStatePlaceholderNode()] : genList)).buildStateNodeSet(ctx);
 						const suspendGroup = new SuspendGroup();
 						const switchingPage = new SwitchingPage(suspendGroup);
 						// 各種イベントのインスタンスの単方向関連付け
@@ -105,7 +114,6 @@ class VariableStateNodeSet extends StateNodeSet {
 
 				// 親が有効ならばノードの付け替えを実施する
 				if (element.parentElement) {
-					ctx.component?.onBeforeUpdate?.();
 					const promiseList = [];
 					if (props.move.value && this.first.element.nodeType === Node.ELEMENT_NODE && element.nodeType === Node.ELEMENT_NODE) {
 						// FLIPによるアニメーションの実施
@@ -136,7 +144,17 @@ class VariableStateNodeSet extends StateNodeSet {
 					else {
 						promiseList.push(...this.#setupNodeList(element, endNode, deleteNodeSet));
 					}
-					Promise.all(promiseList).then(() => ctx.component?.onAfterUpdate?.());
+					Promise.all(promiseList).then(() => {
+						if (!locked) {
+							// DOMツリー構築に関する非同期処理解決まで処理を遅延する
+							ctx.state.unlock([ctx.sideEffectLabel])();
+						}
+						ctx.component?.onAfterUpdate?.();
+					});
+				}
+				else if (!locked) {
+					// 遅延対象の処理は存在しないためロックを解除する
+					ctx.state.unlock([ctx.sideEffectLabel])();
 				}
 			}
 		});
@@ -147,7 +165,8 @@ class VariableStateNodeSet extends StateNodeSet {
 		// 初期状態の構築
 		for (const e of props.target.value) {
 			const key = props.key.value(e);
-			const { set, sibling: sibling_ } = (new GenStateNodeSet(normalizeCtxChild(gen(e, key, props.key.value)))).buildStateNodeSet(ctx);
+			const genList = normalizeCtxChild(gen(e, key, props.key.value));
+			const { set, sibling: sibling_ } = (new GenStateNodeSet(genList.length === 0 ? [new GenStatePlaceholderNode()] : genList)).buildStateNodeSet(ctx);
 			const suspendGroup = new SuspendGroup();
 			const switchingPage = new SwitchingPage(suspendGroup);
 			// 各種イベントのインスタンスの単方向関連付け
@@ -164,13 +183,18 @@ class VariableStateNodeSet extends StateNodeSet {
 			this.nestedNodeSet.push(set);
 			sibling.push(...sibling_);
 		}
+		if (this.nestedNodeSet.length === 0) {
+			const { set, sibling: sibling_ } = (new GenStateNodeSet([new GenStatePlaceholderNode()])).buildStateNodeSet(ctx);
+			this.nestedNodeSet.push(set);
+			sibling.push(...sibling_);
+		}
 
 		ctx.state.update([{ caller: () => {
 			// ノードの切り替え
 			const cancellable = props.cancellable.value;
 			for (const { set, switching } of this.#keyList.values()) {
 				const parent = set.first.element.parentElement;
-				const afterElement = set.last.element.nextElementSibling;
+				const afterElement = set.last.element.nextSibling;
 				switching.afterSwitching = props.initSwitching.value ? switching.afterSwitching : undefined;
 				switching.insertBefore(set, afterElement, parent, cancellable);
 				switching.afterSwitching = props.onAfterSwitching.value;
@@ -213,8 +237,9 @@ class VariableStateNodeSet extends StateNodeSet {
 		}
 		// ノードの削除
 		for (const { switching } of deleteNodeSet) {
-			const node = switching.node;
-			promiseList.push(switching.detach(cancellable).then(() => node.remove()));
+			// ノードは削除されるためリソースを開放しておく
+			switching.node.free();
+			promiseList.push(switching.detach(cancellable));
 		}
 		// 要素が存在しないときはplaceholderを設置
 		if (nodeSetList.length === 0) {

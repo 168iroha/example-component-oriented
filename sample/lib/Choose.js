@@ -42,11 +42,27 @@ class ShowStateNodeSet extends StateNodeSet {
 				const flag = props.test.value === undefined || props.test.value(next);
 				// キャッシュヒットの検査
 				const cache = props.cache.value ?? false;
-				const genStateNodeSet = (cache ? this.#cache : undefined) ?? new GenStateNodeSet(normalizeCtxChild(flag ? gen(next) : [new GenStatePlaceholderNode()]));
+				const genStateNodeSet = (() => {
+					const set = cache ? this.#cache : undefined;
+					if (set) {
+						return set;
+					}
+					else {
+						const genList = normalizeCtxChild(normalizeCtxChild(flag ? gen(next) : [new GenStatePlaceholderNode()]));
+						return new GenStateNodeSet(genList.length === 0 ? [new GenStatePlaceholderNode()] : genList);
+					}
+				})();
 				let callback = undefined;
 				ctx.component?.onBeforeUpdate?.();
+				const locked = ctx.state.locked(ctx.sideEffectLabel);
+				if (!locked) {
+					ctx.state.lock([ctx.sideEffectLabel]);
+				}
 				let promise = undefined;
 				if (genStateNodeSet instanceof GenStateNodeSet) {
+					// ノードは削除されるためリソースを開放しておく
+					switchingPage.node.free();
+
 					// 表示する要素が存在しないときは代わりにplaceholderを設置
 					const { set, sibling } = genStateNodeSet.buildStateNodeSet(ctx);
 					this.nestedNodeSet = [set];
@@ -62,7 +78,7 @@ class ShowStateNodeSet extends StateNodeSet {
 						}
 					}, localSuspenseCtx);
 					if (localSuspenseCtx.exists) {
-						callback = () => switchingPage.switching(async () => { await localSuspenseCtx.call(); return set; }, props.cancellable.value ?? true).then(() => localSuspenseCtx.resolve());
+						callback = () => switchingPage.switching(async () => { await localSuspenseCtx.call(); return set; }, props.cancellable.value ?? true).finally(() => localSuspenseCtx.resolve());
 					}
 					else {
 						callback = () => switchingPage.switching(set, props.cancellable.value ?? true);
@@ -79,7 +95,13 @@ class ShowStateNodeSet extends StateNodeSet {
 				else {
 					promise = callback();
 				}
-				promise.then(() => ctx.component?.onAfterUpdate?.());
+				promise.then(() => {
+					if (!locked) {
+						// DOMツリー構築に関する非同期処理解決まで処理を遅延する
+						ctx.state.unlock([ctx.sideEffectLabel])();
+					}
+					ctx.component?.onAfterUpdate?.();
+				});
 			}
 		});
 		if (caller) {
@@ -98,7 +120,8 @@ class ShowStateNodeSet extends StateNodeSet {
 			const val = props.target.value;
 			const flag = val !== undefined && (props.test.value === undefined || props.test.value(val));
 			// 表示する要素が存在しないときは代わりにplaceholderを設置
-			const { set, sibling: sibling_ } = (new GenStateNodeSet(normalizeCtxChild(flag ? gen(val) : [new GenStatePlaceholderNode()]))).buildStateNodeSet(ctx);
+			const genList = normalizeCtxChild(normalizeCtxChild(flag ? gen(val) : [new GenStatePlaceholderNode()]));
+			const { set, sibling: sibling_ } = (new GenStateNodeSet(genList.length === 0 ? [new GenStatePlaceholderNode()] : genList)).buildStateNodeSet(ctx);
 			this.nestedNodeSet = [set];
 			sibling.push(...sibling_);
 			if (flag && (props.cache.value ?? false)) {
@@ -107,7 +130,7 @@ class ShowStateNodeSet extends StateNodeSet {
 
 			ctx.state.update([{ caller: () => {
 				const parent = this.first.element.parentElement;
-				const afterElement = this.last.element.nextElementSibling;
+				const afterElement = this.last.element.nextSibling;
 				const set = this.nestedNodeSet[0];
 				const page = this.first instanceof StateAsyncComponent ? async () => { await this.first.finished; return set; } : set;
 				switchingPage.afterSwitching = props.initSwitching.value ?? false ? switchingPage.afterSwitching : undefined;
@@ -254,9 +277,16 @@ class WhenStateNodeSet extends StateNodeSet {
 
 				// 選択対象もインデックスが変わらないときは遷移しない(Whent単体の場合は遷移する)
 				if (genStateNodeSet) {
+					// ノードは削除されるためリソースを開放しておく
+					switchingPage.node.free();
+
 					const cancellable = (this.#prevChooseIndex >= 0 ? nestedNodeSet[this.#prevChooseIndex].props.cancellable.value : undefined) ?? props.cancellable.value;
 					let callback = undefined;
 					ctx.component?.onBeforeUpdate?.();
+					const locked = ctx.state.locked(ctx.sideEffectLabel);
+					if (!locked) {
+						ctx.state.lock([ctx.sideEffectLabel]);
+					}
 					if (genStateNodeSet instanceof GenStateNodeSet) {
 						// ノードを構築
 						const { set, sibling } = genStateNodeSet.buildStateNodeSet(ctx);
@@ -269,7 +299,7 @@ class WhenStateNodeSet extends StateNodeSet {
 							}
 						}, localSuspenseCtx);
 						if (localSuspenseCtx.exists) {
-							callback = () => switchingPage.switching(async () => { await localSuspenseCtx.call(); return set; }, cancellable).then(() => localSuspenseCtx.resolve());
+							callback = () => switchingPage.switching(async () => { await localSuspenseCtx.call(); return set; }, cancellable).finally(() => localSuspenseCtx.resolve());
 						}
 						else {
 							callback = () => switchingPage.switching(set, cancellable);
@@ -281,11 +311,13 @@ class WhenStateNodeSet extends StateNodeSet {
 					}
 					// 全てのページ生成の解決後にキャプチャした非同期処理の解決をする
 					const fallthrough = (this.#prevChooseIndex >= 0 ? nestedNodeSet[this.#prevChooseIndex].props.fallthrough.value : undefined) ?? props.fallthrough.value;
-					const node = switchingPage.node;
-					const promise = (fallthrough ? ctx.capture(callback, cancellable) : callback()).then(() => ctx.component?.onAfterUpdate?.());
-					if (!cache) {
-						promise.then(() => node.remove());
-					}
+					(fallthrough ? ctx.capture(callback, cancellable) : callback()).then(() => {
+						if (!locked) {
+							// DOMツリー構築に関する非同期処理解決まで処理を遅延する
+							ctx.state.unlock([ctx.sideEffectLabel])();
+						}
+						ctx.component?.onAfterUpdate?.();
+					});
 					switchingPage.afterSwitching = props.onAfterSwitching.value;
 					switchingPage.beforeSwitching = props.onBeforeSwitching.value;
 				}
@@ -310,7 +342,7 @@ class WhenStateNodeSet extends StateNodeSet {
 
 		ctx.state.update([{ caller: () => {
 			const parent = this.first.element.parentElement;
-			const afterElement = this.last.element.nextElementSibling;
+			const afterElement = this.last.element.nextSibling;
 			const set = this.nestedNodeSet[0];
 			const page = this.first instanceof StateAsyncComponent ? async () => { await this.first.finished; return set; } : set;
 			const initSwitching = (this.#prevChooseIndex >= 0 ? nestedNodeSet[this.#prevChooseIndex].props.initSwitching.value : undefined) ?? props.initSwitching.value;
@@ -382,13 +414,20 @@ class WhenStateNodeSet extends StateNodeSet {
 			const set = this.#cacheTable[i];
 			if (cache) {
 				// キャッシュが存在すればそのまま返す/存在しなければ結果をキャッシュする
-				return set ?? (new GenStateNodeSet(normalizeCtxChild(nestedNodeSet[i].gen(val)))).getStateNodeSet(s => this.#cacheTable[i] = s);
+				if (set) {
+					return set;
+				}
+				else {
+					const genList = normalizeCtxChild(nestedNodeSet[i].gen(val));
+					return (new GenStateNodeSet(genList.length === 0 ? [new GenStatePlaceholderNode()] : genList)).getStateNodeSet(s => this.#cacheTable[i] = s)
+				}
 			}
 			else {
 				if (set) {
 					this.#cacheTable[i] = undefined;
 				}
-				return new GenStateNodeSet(normalizeCtxChild(nestedNodeSet[i].gen(val)));
+				const genList = normalizeCtxChild(nestedNodeSet[i].gen(val));
+				return new GenStateNodeSet(genList.length === 0 ? [new GenStatePlaceholderNode()] : genList);
 			}
 		}
 		return undefined;
