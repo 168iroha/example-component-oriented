@@ -163,8 +163,9 @@ class VariableStateNodeSet extends StateNodeSet {
 		}
 
 		// 初期状態の構築
-		for (const e of props.target.value) {
-			const key = props.key.value(e);
+		for (let i = 0; i < props.target.value.length; ++i) {
+			const e = props.target.value[i];
+			const key = props.key.value ? props.key.value(e) : i;
 			const genList = normalizeCtxChild(gen(e, key, props.key.value));
 			const { set, sibling: sibling_ } = (new GenStateNodeSet(genList.length === 0 ? [new GenStatePlaceholderNode()] : genList)).buildStateNodeSet(ctx);
 			const suspendGroup = new SuspendGroup();
