@@ -64,8 +64,8 @@ class VariableStateNodeSet extends StateNodeSet {
 				// 挿入を行うノードの全体の構築
 				for (let i = 0; i < next.length; ++i) {
 					const e = next[i];
-					const key = props.key.value(e);
-					if (this.#keyList.has(key)) {
+					const key = props.key.value ? props.key.value(e) : i;
+					if (props.key.value && this.#keyList.has(key)) {
 						// 現在表示している対象の表示の場合はノードを移動させる
 						const val = this.#keyList.get(key);
 						keyList.set(key, { set: val.set, switching: val.switching, callerList: val.callerList, index: i });
@@ -308,7 +308,7 @@ function ForEach(props, children) {
 ForEach.propTypes = {
 	/** @type { T[] } 表示対象を切り替える基準となる変数 */
 	target: [],
-	/** @type { (val: T) => unknown } 表示対象を切り替える基準となる変数 */
+	/** @type { ((val: T) => unknown) | undefined } 表示対象を切り替える基準となる変数(undefinedの場合はtargetのindexに相当) */
 	key: undefined,
 	/** @type { ((node: StateNode) => Promise | undefined) | undefined } ノード削除前に実行されるイベント */
 	onBeforeSwitching: undefined,
