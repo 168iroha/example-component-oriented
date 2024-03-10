@@ -980,7 +980,8 @@ class GenStateNode {
 	 */
 	build(ctx = undefined) {
 		ctx = ctx ?? new Context(window);
-		const generator = this.#mountImpl(ctx, undefined, 'nowait');
+		ctx.waitFlag = 'nowait';
+		const generator = this.#mountImpl(ctx, undefined, ctx.waitFlag);
 		let arg = undefined;
 		while (true) {
 			const { done, value } = generator.next(arg);
@@ -1000,7 +1001,8 @@ class GenStateNode {
 	 */
 	mount(target, ctx = undefined) {
 		ctx = ctx ?? new Context(window);
-		const generator = this.#mountImpl(ctx, target, 'nowait');
+		ctx.waitFlag = 'nowait';
+		const generator = this.#mountImpl(ctx, target, ctx.waitFlag);
 		let arg = undefined;
 		while (true) {
 			const { done, value } = generator.next(arg);
@@ -1019,14 +1021,15 @@ class GenStateNode {
 	 * @param { Context | undefined } ctx ノードを生成する場所
 	 */
 	async write(target, ctx = undefined) {
-		// 変更の伝播を破棄する
 		ctx = ctx ?? new Context(window);
-		const generator = this.#mountImpl(ctx, target, 'wait');
+		ctx.waitFlag = 'wait';
+		const generator = this.#mountImpl(ctx, target, ctx.waitFlag);
 		let arg = undefined;
 		while (true) {
 			const { done, value } = generator.next(arg);
 
 			if (done) {
+				// 変更の伝播を破棄する
 				ctx.state.unlock(value.labelSet);
 				return ctx;
 			}
@@ -2594,6 +2597,9 @@ class Context {
 	/** @type { [boolean] } 子へ関数要素を伝播したかを示すフラグ */
 	#functionDeliveryFlag = [false];
 
+	/** @type { 'wait' | 'nowait' } コンポーネントの構築方式 */
+	waitFlag = 'nowait';
+
 	/**
 	 * コンストラクタ
 	 * @param { typeof window } window ウィンドウインターフェース
@@ -2616,6 +2622,7 @@ class Context {
 	generateContextForComponent(gen) {
 		const ctx = new Context(this.#window, this.#domUpdateController, this.#stateCtx, this.#suspenseCtx);
 		ctx.#component = gen(ctx);
+		ctx.waitFlag = this.waitFlag;
 		return ctx;
 	}
 
@@ -2631,6 +2638,7 @@ class Context {
 		ctx.#domUpdateLabel = this.#domUpdateLabel;
 		ctx.#sideEffectLabel = this.#sideEffectLabel;
 		ctx.#functionDeliveryFlag = this.#functionDeliveryFlag;
+		ctx.waitFlag = this.waitFlag;
 		return ctx;
 	}
 

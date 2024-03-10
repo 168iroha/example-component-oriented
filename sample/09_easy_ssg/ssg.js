@@ -1,4 +1,4 @@
-import { Context, $ } from "../../../src/core.js";
+import { Context, $ } from "../../src/core.js";
 import { App } from "./app.js";
 import { JSDOM } from 'jsdom';
 import fs from "fs";
