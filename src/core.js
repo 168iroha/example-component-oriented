@@ -3136,7 +3136,16 @@ function createWrapperFunction(f, component) {
 function textToStateNodeSet(ctx, text) {
 	const div = ctx.window.document.createElement('div');
 	div.innerHTML = text;
-	return new GenStateNodeSet([...div.childNodes].filter(child => child.nodeType === ctx.window.Node.ELEMENT_NODE).map(child => html(child)));
+	return new GenStateNodeSet([...div.childNodes].filter(
+		child => child.nodeType === ctx.window.Node.ELEMENT_NODE || child.nodeType === ctx.window.Node.TEXT_NODE
+	).map(child => {
+		switch (child.nodeType) {
+			case ctx.window.Node.ELEMENT_NODE:
+				return html(child);
+			case ctx.window.Node.TEXT_NODE:
+				return new GenStateTextNode(child.data);
+		}
+	}));
 }
 
 export {
