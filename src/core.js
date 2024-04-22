@@ -840,11 +840,8 @@ class GenStateNode {
 		/** @type { Set<ICallerLabel> } */
 		const lockedLabelSet = new Set();
 
-		// コンポーネントの下でノードが構築されるかの判定
+		// イベント制御が不要なコンポーネントとして退避
 		const rootComponent = ctx.component;
-		if (!(rootComponent || (this instanceof GenStateComponent))) {
-			throw new Error('It must be built under the Component.');
-		}
 
 		const ret = yield* this.#mountComponent(ctx, this, target, lockedLabelSet, waitFlag);
 
@@ -959,16 +956,15 @@ class GenStateNode {
 			}
 
 			const component = ctx.component;
-			if (component !== rootComponent) {
-				if (!(component instanceof StateAsyncComponent)) {
-					// コンポーネント配下のコンポーネントが構築完了したためonMountを発火
-					component.onMount();
-				}
-				if (!ctx.hasFunctionDelivery && ctx.state.lockedCount(ctx.sideEffectLabel) === 0) {
-					// 副作用はないためロックを解除
-					ctx.state.unlock([ctx.sideEffectLabel]);
-					lockedLabelSet.delete(ctx.sideEffectLabel);
-				}
+			if (component !== rootComponent && !(component instanceof StateAsyncComponent)) {
+				// コンポーネント配下のコンポーネントが構築完了したためonMountを発火
+				// ただし関数の引数として入力されたコンテキストが属するコンポーネントはonMount()発火済みの想定のため制御から外す
+				component.onMount();
+			}
+			if (!ctx.hasFunctionDelivery && ctx.state.lockedCount(ctx.sideEffectLabel) === 0) {
+				// 副作用はないためロックを解除
+				ctx.state.unlock([ctx.sideEffectLabel]);
+				lockedLabelSet.delete(ctx.sideEffectLabel);
 			}
 		}
 		return { labelSet: lockedLabelSet, node: resuleNode };
