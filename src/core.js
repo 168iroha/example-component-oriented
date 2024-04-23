@@ -1760,7 +1760,7 @@ class GenStateDomNode extends GenStateNode {
 		//
 		// HTMLInputElementに関する項目の検証
 		//
-		if (element instanceof HTMLInputElement) {
+		if (element instanceof ctx.window.HTMLInputElement) {
 			setReferenceToEventListenerObserver('input', props, ['value', 'valueAsDate', 'valueAsNumber']);
 			setReferenceToEventListenerObserver('change', props, ['checked']);
 		}
@@ -1768,14 +1768,14 @@ class GenStateDomNode extends GenStateNode {
 		//
 		// HTMLSelectElementに関する項目の検証
 		//
-		if (element instanceof HTMLSelectElement) {
+		if (element instanceof ctx.window.HTMLSelectElement) {
 			setReferenceToEventListenerObserver('change', props, ['value', 'selectedOptions']);
 		}
 
 		//
 		// HTMLTextAreaElementに関する項目の検証
 		//
-		if (element instanceof HTMLTextAreaElement) {
+		if (element instanceof ctx.window.HTMLTextAreaElement) {
 			setReferenceToEventListenerObserver('input', props, ['value']);
 		}
 	}
