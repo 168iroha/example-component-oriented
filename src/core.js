@@ -1667,11 +1667,6 @@ class GenStateDomNode extends GenStateNode {
 	 * @param { ObservableStates<K> } props 観測する対象
 	 */
 	observe(props) {
-		// Web Componentは対象外
-		if (customElements.get(this.#tag.toLowerCase())) {
-			throw new Error('Observation of Web Component in StateDomNode is not supported.');
-		}
-
 		// 既にobserve()が呼びだされたことがあるのならばノードを複製する
 		const node = this.#observableStates ? this.clone() : this;
 		node.#observableStates = props;
@@ -1753,7 +1748,7 @@ class GenStateDomNode extends GenStateNode {
 		};
 
 		//
-		// ObservableHTMLElementStateに関する項目の検証
+		// HTMLElementStateに関する項目の検証
 		//
 		{
 			setReferenceToObserver(setter => {
@@ -1763,7 +1758,7 @@ class GenStateDomNode extends GenStateNode {
 		}
 
 		//
-		// ObservableHTMLInputElementStateに関する項目の検証
+		// HTMLInputElementに関する項目の検証
 		//
 		if (element instanceof HTMLInputElement) {
 			setReferenceToEventListenerObserver('input', props, ['value', 'valueAsDate', 'valueAsNumber']);
@@ -1771,14 +1766,14 @@ class GenStateDomNode extends GenStateNode {
 		}
 
 		//
-		// ObservableHTMLSelectElementに関する項目の検証
+		// HTMLSelectElementに関する項目の検証
 		//
 		if (element instanceof HTMLSelectElement) {
 			setReferenceToEventListenerObserver('change', props, ['value', 'selectedOptions']);
 		}
 
 		//
-		// ObservableHTMLTextAreaElementに関する項目の検証
+		// HTMLTextAreaElementに関する項目の検証
 		//
 		if (element instanceof HTMLTextAreaElement) {
 			setReferenceToEventListenerObserver('input', props, ['value']);
