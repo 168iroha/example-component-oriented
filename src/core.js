@@ -956,15 +956,16 @@ class GenStateNode {
 			}
 
 			const component = ctx.component;
-			if (component !== rootComponent && !(component instanceof StateAsyncComponent)) {
-				// コンポーネント配下のコンポーネントが構築完了したためonMountを発火
-				// ただし関数の引数として入力されたコンテキストが属するコンポーネントはonMount()発火済みの想定のため制御から外す
-				component.onMount();
-			}
-			if (!ctx.hasFunctionDelivery && ctx.state.lockedCount(ctx.sideEffectLabel) === 0) {
-				// 副作用はないためロックを解除
-				ctx.state.unlock([ctx.sideEffectLabel]);
-				lockedLabelSet.delete(ctx.sideEffectLabel);
+			if (component !== rootComponent) {
+				if (!(component instanceof StateAsyncComponent)) {
+					// コンポーネント配下のコンポーネントが構築完了したためonMountを発火
+					component.onMount();
+				}
+				if (!ctx.hasFunctionDelivery && ctx.state.lockedCount(ctx.sideEffectLabel) === 0) {
+					// 副作用はないためロックを解除
+					ctx.state.unlock([ctx.sideEffectLabel]);
+					lockedLabelSet.delete(ctx.sideEffectLabel);
+				}
 			}
 		}
 		return { labelSet: lockedLabelSet, node: resuleNode };
@@ -2291,7 +2292,7 @@ class SuspenseContext {
 				resolve();
 			};
 			// 標準で遅延実行する
-			ctx.state.update2([f], );
+			ctx.state.update2([f]);
 		});
 	}
 }
