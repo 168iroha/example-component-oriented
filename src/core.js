@@ -3143,7 +3143,9 @@ function textToStateNodeSet(ctx, text) {
 export {
 	CommonLabel,
 	IState,
+	NotState,
 	State,
+	Computed,
 	StateNode,
 	StatePlaceholderNode,
 	StateNodeSet,
