@@ -789,6 +789,11 @@ class GenStateNode {
 		/** @type { StateComponent[] } */
 		const comonentList = [];
 		while (gen instanceof GenStateComponent) {
+			if (waitFlag === 'wait' && gen instanceof GenStateAsyncComponent) {
+				// waitかつ非同期コンポーネントの場合は評価しない(副作用ではないことにより構築されるのを防止)
+				gen = new GenStatePlaceholderNode();
+				break;
+			}
 			const { node, children } = yield gen.buildCurrent(ctx, element, waitFlag);
 			lockedLabelSet.add(node.ctx.sideEffectLabel);
 			if ((prevNode instanceof StateComponent) && !(prevNode instanceof StateAsyncComponent)) {
@@ -839,6 +844,12 @@ class GenStateNode {
 		this.getStateNode(node => resuleNode = node);
 		/** @type { Set<ICallerLabel> } */
 		const lockedLabelSet = new Set();
+
+		// ルート要素配下のコンポーネント以外で生じた副作用の評価を遅延するためにロック
+		if (!ctx.state.locked(ctx.sideEffectLabel)) {
+			ctx.state.lock([ctx.sideEffectLabel]);
+			lockedLabelSet.add(ctx.sideEffectLabel);
+		}
 
 		// イベント制御が不要なコンポーネントとして退避
 		const rootComponent = ctx.component;
@@ -961,11 +972,11 @@ class GenStateNode {
 					// コンポーネント配下のコンポーネントが構築完了したためonMountを発火
 					component.onMount();
 				}
-				if (!ctx.hasFunctionDelivery && ctx.state.lockedCount(ctx.sideEffectLabel) === 0) {
-					// 副作用はないためロックを解除
-					ctx.state.unlock([ctx.sideEffectLabel]);
-					lockedLabelSet.delete(ctx.sideEffectLabel);
-				}
+			}
+			if (lockedLabelSet.has(ctx.sideEffectLabel) && !ctx.hasFunctionDelivery && ctx.state.lockedCount(ctx.sideEffectLabel) === 0) {
+				// 副作用はないためロックを解除
+				ctx.state.unlock([ctx.sideEffectLabel]);
+				lockedLabelSet.delete(ctx.sideEffectLabel);
 			}
 		}
 		return { labelSet: lockedLabelSet, node: resuleNode };
@@ -2627,8 +2638,8 @@ class Context {
 		const ctx = new Context(this.#window, this.#domUpdateController, this.#stateCtx, suspenseCtx);
 		ctx.#lifecycle = this.#lifecycle;
 		ctx.#component = this.#component;
-		ctx.#domUpdateLabel = this.#domUpdateLabel;
-		ctx.#sideEffectLabel = this.#sideEffectLabel;
+		ctx.#domUpdateLabel = this.domUpdateLabel;
+		ctx.#sideEffectLabel = this.sideEffectLabel;
 		ctx.#functionDeliveryFlag = this.#functionDeliveryFlag;
 		ctx.waitFlag = this.waitFlag;
 		return ctx;
