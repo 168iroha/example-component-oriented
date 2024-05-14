@@ -483,6 +483,11 @@ class Computed extends IState {
 	 * @returns 
 	 */
 	delete(caller) { return this.#state.delete(caller); }
+
+	/**
+	 * 内部で保持している状態変数の取得(開発者以外の利用は非推奨)
+	 */
+	get state() { return this.#state; }
 }
 
 /**
@@ -789,6 +794,11 @@ class GenStateNode {
 		/** @type { StateComponent[] } */
 		const comonentList = [];
 		while (gen instanceof GenStateComponent) {
+			if (waitFlag === 'wait' && gen instanceof GenStateAsyncComponent) {
+				// waitかつ非同期コンポーネントの場合は評価しない(副作用ではないことにより構築されるのを防止)
+				gen = new GenStatePlaceholderNode();
+				break;
+			}
 			const { node, children } = yield gen.buildCurrent(ctx, element, waitFlag);
 			lockedLabelSet.add(node.ctx.sideEffectLabel);
 			if ((prevNode instanceof StateComponent) && !(prevNode instanceof StateAsyncComponent)) {
@@ -839,6 +849,12 @@ class GenStateNode {
 		this.getStateNode(node => resuleNode = node);
 		/** @type { Set<ICallerLabel> } */
 		const lockedLabelSet = new Set();
+
+		// ルート要素配下のコンポーネント以外で生じた副作用の評価を遅延するためにロック
+		if (!ctx.state.locked(ctx.sideEffectLabel)) {
+			ctx.state.lock([ctx.sideEffectLabel]);
+			lockedLabelSet.add(ctx.sideEffectLabel);
+		}
 
 		// イベント制御が不要なコンポーネントとして退避
 		const rootComponent = ctx.component;
@@ -961,11 +977,11 @@ class GenStateNode {
 					// コンポーネント配下のコンポーネントが構築完了したためonMountを発火
 					component.onMount();
 				}
-				if (!ctx.hasFunctionDelivery && ctx.state.lockedCount(ctx.sideEffectLabel) === 0) {
-					// 副作用はないためロックを解除
-					ctx.state.unlock([ctx.sideEffectLabel]);
-					lockedLabelSet.delete(ctx.sideEffectLabel);
-				}
+			}
+			if (lockedLabelSet.has(ctx.sideEffectLabel) && !ctx.hasFunctionDelivery && ctx.state.lockedCount(ctx.sideEffectLabel) === 0) {
+				// 副作用はないためロックを解除
+				ctx.state.unlock([ctx.sideEffectLabel]);
+				lockedLabelSet.delete(ctx.sideEffectLabel);
 			}
 		}
 		return { labelSet: lockedLabelSet, node: resuleNode };
@@ -2531,7 +2547,7 @@ class StateContext {
 	 * 単方向データの作成
 	 * @template T
 	 * @param { IState<T> | () => T } src 作成元のデータ
-	 * @param { State<T> } dest 作成対象のデータ
+	 * @param { State<T> | (v: T) => unknown } dest 作成対象のデータ
 	 * @param { CallerType['label'] } label 更新の振る舞いを決めるラベル
 	 * @returns { { caller: CallerType; states: State<unknown>[] } } 呼び出し元情報
 	 */
@@ -2539,13 +2555,31 @@ class StateContext {
 		const ctx = src instanceof Function ? this : src.ctx ?? this;
 		let circuit = false;
 		const callerType = {
-			caller: src instanceof Function ?
+			caller:
+			// 以下の関数群は何度も実行されることが想定されるため関数内での分岐は最小限にして展開する
+			src instanceof Function ?
+			dest instanceof Function ?
 			() => {
 				// srcの変更で必ず発火させつつ
 				// destの変更およびsrc = destな操作で発火および循環させない
 				if (!circuit) {
 					circuit = true;
+					dest(src());
+					circuit = false;
+				}
+			} :
+			() => {
+				if (!circuit) {
+					circuit = true;
 					dest.value = src();
+					circuit = false;
+				}
+			} :
+			dest instanceof Function ?
+			() => {
+				if (!circuit) {
+					circuit = true;
+					dest(src.value);
 					circuit = false;
 				}
 			} :
@@ -2558,7 +2592,21 @@ class StateContext {
 			}
 			,label
 		};
-		return ctx.call(callerType);
+		if (src instanceof Function) {
+			// 関数の場合はsrcで参照されるあらゆる状態変数の変更を監視
+			return ctx.call(callerType);
+		}
+		else {
+			callerType.caller();
+			if (src instanceof State || src instanceof Computed) {
+				// 状態変数の場合はsrc.valueについてのみ変更を監視
+				src.add(callerType);
+				return { caller: callerType, states: [src instanceof State ? src : src.state] };
+			}
+			else {
+				return { caller: callerType, states: [] };
+			}
+		}
 	}
 }
 
@@ -2627,8 +2675,8 @@ class Context {
 		const ctx = new Context(this.#window, this.#domUpdateController, this.#stateCtx, suspenseCtx);
 		ctx.#lifecycle = this.#lifecycle;
 		ctx.#component = this.#component;
-		ctx.#domUpdateLabel = this.#domUpdateLabel;
-		ctx.#sideEffectLabel = this.#sideEffectLabel;
+		ctx.#domUpdateLabel = this.domUpdateLabel;
+		ctx.#sideEffectLabel = this.sideEffectLabel;
 		ctx.#functionDeliveryFlag = this.#functionDeliveryFlag;
 		ctx.waitFlag = this.waitFlag;
 		return ctx;
@@ -2831,15 +2879,18 @@ class Context {
  * @param { CallerType['label'] } label setterに付加するラベル
  */
 function setParam(val, setter, label = undefined) {
-	// 状態変数の場合は変更を監視
 	if (val instanceof State || val instanceof Computed) {
-		return val.ctx.call({ caller: () => setter(val.value), label });
+		// 状態変数の場合は変更を監視
+		const callerType = { caller: () => setter(val.value), label };
+		callerType.caller();
+		val.add(callerType);
+		return { caller: callerType, states: [val instanceof State ? val : val.state] };
 	}
 	else if (val instanceof IState) {
 		setter(val.value);
 	}
-	// 状態変数でない場合はそのまま設定
 	else {
+		// 状態変数でない場合はそのまま設定
 		setter(val);
 	}
 }

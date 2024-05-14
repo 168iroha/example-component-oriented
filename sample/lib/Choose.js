@@ -108,12 +108,8 @@ class ShowStateNodeSet extends StateNodeSet {
 			this.callerList.push(caller);
 		}
 		// 各種イベントのインスタンスの単方向関連付け
-		ctx.call(() => {
-			switchingPage.afterSwitching = props.onAfterSwitching.value;
-		});
-		ctx.call(() => {
-			switchingPage.beforeSwitching = props.onBeforeSwitching.value;
-		});
+		ctx.state.unidirectional(props.onAfterSwitching, x => switchingPage.afterSwitching = x);
+		ctx.state.unidirectional(props.onBeforeSwitching, x => switchingPage.beforeSwitching = x);
 
 		// 初期表示の設定
 		{
@@ -327,12 +323,8 @@ class WhenStateNodeSet extends StateNodeSet {
 			this.callerList.push(caller);
 		}
 		// 各種イベントのインスタンスの単方向関連付け
-		ctx.call(() => {
-			switchingPage.afterSwitching = props.onAfterSwitching.value;
-		});
-		ctx.call(() => {
-			switchingPage.beforeSwitching = props.onBeforeSwitching.value;
-		});
+		ctx.state.unidirectional(props.onAfterSwitching, x => switchingPage.afterSwitching = x);
+		ctx.state.unidirectional(props.onBeforeSwitching, x => switchingPage.beforeSwitching = x);
 
 		/** @type { GenStateNodeSet } 初期表示の設定 */
 		const genStateNode = this.#chooseNode(ctx, props.target.value, nestedNodeSet, switchingPage);
