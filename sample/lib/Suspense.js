@@ -462,17 +462,14 @@ class GenSuspenseStateNodeSet extends GenStateNodeSet {
 		const suspendGroup = new LocalSuspenseContextOnStateNode();
 		const ctx2 = ctx.generateContextForSuspense(new SuspenseContext(suspendGroup));
 		// 各種LocalSuspenseContextOnStateNodeのインスタンスの単方向関連付け
-		ctx2.call(() => {
-			suspendGroup.switchingPage.afterSwitching = this.#props.onAfterSwitching.value;
-		});
-		ctx2.call(() => {
-			suspendGroup.switchingPage.beforeSwitching = this.#props.onBeforeSwitching.value;
-		});
-		ctx2.call({ caller: () => {
-			if (this.#props.fallback.value) {
-				suspendGroup.alternativePage = this.#props.fallback.value.build(ctx2);
+		ctx2.state.unidirectional(this.#props.onAfterSwitching, x => suspendGroup.switchingPage.afterSwitching = x);
+		ctx2.state.unidirectional(this.#props.onBeforeSwitching, x => suspendGroup.switchingPage.beforeSwitching = x);
+		ctx2.state.unidirectional(this.#props.fallback, x => {
+			if (x) {
+				suspendGroup.alternativePage = x.build(ctx2);
 			}
-		}, label: ctx2.sideEffectLabel });
+		}, ctx2.sideEffectLabel);
+
 		this.nestedNodeSet[0].getStateNode(node => suspendGroup.page = node);
 		const set = new StateNodeSet(ctx2, this.nestedNodeSet, sibling);
 		return { set, ctx: ctx2, sibling };

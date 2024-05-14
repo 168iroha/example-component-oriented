@@ -84,12 +84,8 @@ class VariableStateNodeSet extends StateNodeSet {
 						const switchingPage = new SwitchingPage(suspendGroup);
 						// 各種イベントのインスタンスの単方向関連付け
 						const callerList= [
-							ctx.call(() => {
-								switchingPage.afterSwitching = props.onAfterSwitching.value;
-							}),
-							ctx.call(() => {
-								switchingPage.beforeSwitching = props.onBeforeSwitching.value;
-							})
+							ctx.state.unidirectional(props.onAfterSwitching, x => switchingPage.afterSwitching = x),
+							ctx.state.unidirectional(props.onBeforeSwitching, x => switchingPage.beforeSwitching = x)
 						];
 						keyList.set(key, { set, switching: switchingPage, callerList, index: i });
 						nodeSetList.push(set);
@@ -172,12 +168,8 @@ class VariableStateNodeSet extends StateNodeSet {
 			const switchingPage = new SwitchingPage(suspendGroup);
 			// 各種イベントのインスタンスの単方向関連付け
 			const callerList= [
-				ctx.call(() => {
-					switchingPage.afterSwitching = props.onAfterSwitching.value;
-				}),
-				ctx.call(() => {
-					switchingPage.beforeSwitching = props.onBeforeSwitching.value;
-				})
+				ctx.state.unidirectional(props.onAfterSwitching, x => switchingPage.afterSwitching = x),
+				ctx.state.unidirectional(props.onBeforeSwitching, x => switchingPage.beforeSwitching = x)
 			];
 			// ノードの設定
 			this.#keyList.set(key, { set, switching: switchingPage, callerList, index: this.#keyList.size });
