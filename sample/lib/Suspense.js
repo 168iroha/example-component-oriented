@@ -466,7 +466,7 @@ class GenSuspenseStateNodeSet extends GenStateNodeSet {
 		ctx2.state.unidirectional(this.#props.onBeforeSwitching, x => suspendGroup.switchingPage.beforeSwitching = x);
 		ctx2.state.unidirectional(this.#props.fallback, x => {
 			if (x) {
-				suspendGroup.alternativePage = x.build(ctx2);
+				suspendGroup.alternativePage = x.build(ctx2).node;
 			}
 		}, ctx2.sideEffectLabel);
 
