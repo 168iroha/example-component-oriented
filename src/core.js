@@ -239,8 +239,10 @@ class State extends IState {
 	#value;
 	/** @type { Set<CallerType> } 呼び出し元のハンドラのリスト */
 	#callerList = new Set();
-	/** @type { ((val: State<T>) => boolean) | undefined | boolean } 状態変数の参照が存在しだしたタイミングに1度のみ呼びだされるイベントのハンドラ */
+	/** @type { ((val: State<T>) => void) | undefined | true } 状態変数の参照が存在しだしたタイミングに1度のみ呼びだされるイベントのハンドラ */
 	#onreference = undefined;
+	/** @type { number } thisを観測している状態変数の数 */
+	#observeCnt = 0;
 
 	/**
 	 * コンストラクタ
@@ -314,6 +316,13 @@ class State extends IState {
 	delete(caller) { return this.#callerList.delete(caller); }
 
 	/**
+	 * 状態変数が利用されているかの判定を行う
+	 */
+	get utilized() {
+		return this.#onreference === true ? true : this.#callerList.size > this.#observeCnt;
+	}
+
+	/**
 	 * 状態変数の参照が存在しだしたタイミングに1度のみ呼びだされるイベントの設定
 	 * @param { (val: State<T>) => unknown } callback イベントハンドラ
 	 */
@@ -325,9 +334,9 @@ class State extends IState {
 		const c = s => {
 			s.#onreference = true;
 			callback(s);
-			return true;
 		};
-		if ((typeof this.#onreference === 'boolean') ? this.#onreference : (!this.#onreference && this.#callerList.size > 0) || (this.#onreference && this.#onreference(this))) {
+		if (this.utilized) {
+			// 既にthisが参照されているならば即時でcを呼び出す
 			c(this);
 		}
 		else {
@@ -368,45 +377,33 @@ class State extends IState {
 			return { state, caller: state.observe(this, label) };
 		}
 		if (prop instanceof State || prop instanceof Computed || prop instanceof Function) {
-			// onreferenceが発火しないように無効化
+			// onreferenceが発火しないように無効化して単方向関連付け
 			const caller = this.ctx.noreference(() => this.ctx.unidirectional(prop, this, label));
-			// state.onreferenceなしでstateが1つ以上の参照をもつ(親への状態の伝播なしで状態の参照が存在する場合)
-			// もしくはstate.onreferenceなしでstateが2つ以上の参照をもつ(親への状態の伝播ありで状態の参照が存在する場合)
-			// もしくはonreference()の戻り値がtrue(親への状態の伝播ありで祖先で状態の参照が存在する場合)
-			// の場合に状態変数は利用されている
-			const flag = (typeof this.#onreference === 'boolean') ? this.#onreference : (!this.#onreference && this.#callerList.size > 0) || (this.#onreference && this.#onreference(this));
-			caller.states.forEach(s => {
-				// 1つの状態を複数の状態変数が観測できるようにする
-				if (!s.#onreference) {
-					s.#onreference = s2 => {
-						s2.#onreference = flag;
-						return flag;
-					};
-				}
-			});
-			// このタイミングで値が利用されていない際はchoose()などで後から利用される可能性があるため
-			// 後から通知を行うことができるようにする
-			if (!flag) {
-				// 関連付けられた状態変数のonreferenceを連鎖的に呼び出す
-				this.#onreference = s => {
+			// 状態変数の参照状況の更新
+			caller.states.forEach(state => ++state.#observeCnt);
+
+			/**
+			 * 関連付けられた状態変数のonreferenceを連鎖的に呼び出す#onreferenceの形式の関数
+			 * @param { State<T> } s
+			 */
+			const c = s => {
 					s.#onreference = true;
 					caller.states.forEach(state => {
 						if (state.#onreference instanceof Function) {
 							state.#onreference(state);
 						}
+					else {
 						state.#onreference = true;
-					});
-					return false;
-				};
-			}
-			// 参照ありでonreferenceが呼び出し済みなら関連付けられた状態変数のonreferenceを連鎖的に呼び出す
-			else {
-				caller.states.forEach(state => {
-					if (state.#onreference instanceof Function) {
-						state.#onreference(state);
 					}
-					state.#onreference = true;
-				});
+					});
+				};
+
+			if (this.utilized) {
+				// 既にthisが参照されているならば即時でcを呼び出す
+				c(this);
+			}
+			else {
+				this.#onreference = c;
 			}
 
 			return caller;
@@ -1550,6 +1547,77 @@ class StateDomNode extends StateNode {
 }
 
 /**
+ * 状態の伝播に関する参照情報の設定
+ * @template { string } K
+ * @param { ObservableStates<K> } props 観測する対象
+ * @param { string } targets 監視対象のパラメータ
+ * @param { (key: string) => (state: State<unknown>) => void } callback onreferenceに設定するコールバック
+ */
+function setReference(props, targets, callback) {
+	for (const name of targets) {
+		/** @type { State<unknown> | undefined } */
+		const state = props[name];
+		if (state) {
+			state.onreference = callback(name);
+		}
+	}
+};
+
+/**
+ * オブザーバによる状態の伝播に関する参照情報の設定
+ * @template { string } K
+ * @param { HTMLElement } element 観測する対象をもつ要素
+ * @param { (setter: (element: HTMLElement) => void) => void } observer イベントリスナのタイプ
+ * @param { ObservableStates<K> } props 観測する対象
+ * @param { string[] } targets 監視対象のパラメータ
+ */
+function setReferenceToObserver(element, observer, props, targets) {
+	let callbackEventListenerFlag = true;
+	/**
+	 * イベントの構築
+	 * @param { string } key
+	 * @returns { (state: State<unknown>) => void }
+	 */
+	const callbackEventListener = key => state => {
+		// 初回呼び出し時にのみイベントを設置する
+		if (callbackEventListenerFlag) {
+			callbackEventListenerFlag = !callbackEventListenerFlag;
+			observer(element => {
+				// 各種状態の設定
+				for (const name of targets) {
+					/** @type { State<unknown> | undefined } */
+					const state = props[name];
+					const value = element[name];
+					if (state && state.org !== value) {
+						state.value = value;
+					}
+				}
+			});
+		}
+		// 初期値の伝播
+		state.value = element[key];
+	};
+
+	// 状態の監視の設定
+	setReference(props, targets, callbackEventListener);
+};
+
+/**
+ * イベントリスナのオブザーバによる状態の伝播に関する参照情報の設定
+ * @template { string } K
+ * @template { HTMLElementEventMap } L
+ * @param { HTMLElement } element 観測する対象をもつ要素
+ * @param { L } type イベントリスナのタイプ
+ * @param { ObservableStates<K> } props 観測する対象
+ * @param { string[] } targets 監視対象のパラメータ
+ */
+function setReferenceToEventListenerObserver(element, type, props, targets) {
+	setReferenceToObserver(element, setter => {
+		element.addEventListener(type, e => setter(e.target));
+	}, props, targets);
+};
+
+/**
  * StateDomNodeを生成するためのノード
  * @template { string } K
  */
@@ -1747,77 +1815,11 @@ class GenStateDomNode extends GenStateNode {
 	 * @param { HTMLElement } element 観測する対象をもつ要素
 	 */
 	#observeImpl(ctx, props, element) {
-		/**
-		 * 状態の伝播に関する参照情報の設定
-		 * @param { ObservableStates<K> } props 観測する対象
-		 * @param { string } targets 監視対象のパラメータ
-		 * @param { (key: string) => (state: State<unknown>) => void } callback onreferenceに設定するコールバック
-		 */
-		const setReference = (props, targets, callback) => {
-			for (const name of targets) {
-				/** @type { State<unknown> | undefined } */
-				const state = props[name];
-				if (state) {
-					state.onreference = callback(name);
-				}
-			}
-		};
-
-		/**
-		 * オブザーバによる状態の伝播に関する参照情報の設定
-		 * @param { (setter: (element: HTMLElement) => void) => void } observer イベントリスナのタイプ
-		 * @param { ObservableStates<K> } props 観測する対象
-		 * @param { string[] } targets 監視対象のパラメータ
-		 */
-		const setReferenceToObserver = (observer, props, targets) => {
-			let callbackEventListenerFlag = true;
-			/**
-			 * イベントの構築
-			 * @param { string } key
-			 * @returns { (state: State<unknown>) => void }
-			 */
-			const callbackEventListener = key => state => {
-				// 初回呼び出し時にのみイベントを設置する
-				if (callbackEventListenerFlag) {
-					callbackEventListenerFlag = !callbackEventListenerFlag;
-					observer(element => {
-						// 各種状態の設定
-						for (const name of targets) {
-							/** @type { State<unknown> | undefined } */
-							const state = props[name];
-							const value = element[name];
-							if (state && state.org !== value) {
-								state.value = value;
-							}
-						}
-					});
-				}
-				// 初期値の伝播
-				state.value = element[key];
-			};
-
-			// 状態の監視の設定
-			setReference(props, targets, callbackEventListener);
-		};
-
-		/**
-		 * イベントリスナのオブザーバによる状態の伝播に関する参照情報の設定
-		 * @template { HTMLElementEventMap } L
-		 * @param { L } type イベントリスナのタイプ
-		 * @param { ObservableStates<K> } props 観測する対象
-		 * @param { string[] } targets 監視対象のパラメータ
-		 */
-		const setReferenceToEventListenerObserver = (type, props, targets) => {
-			setReferenceToObserver(setter => {
-				element.addEventListener(type, e => setter(e.target));
-			}, props, targets);
-		};
-
 		//
 		// HTMLElementに関する項目の検証
 		//
 		{
-			setReferenceToObserver(setter => {
+			setReferenceToObserver(element, setter => {
 				const resizeObserver = new ResizeObserver(entries => setter(element));
 				resizeObserver.observe(element);
 			}, props, ['clientHeigth', 'clientWidth']);
@@ -1827,22 +1829,22 @@ class GenStateDomNode extends GenStateNode {
 		// HTMLInputElementに関する項目の検証
 		//
 		if (element instanceof ctx.window.HTMLInputElement) {
-			setReferenceToEventListenerObserver('input', props, ['value', 'valueAsDate', 'valueAsNumber']);
-			setReferenceToEventListenerObserver('change', props, ['checked']);
+			setReferenceToEventListenerObserver(element, 'input', props, ['value', 'valueAsDate', 'valueAsNumber']);
+			setReferenceToEventListenerObserver(element, 'change', props, ['checked']);
 		}
 
 		//
 		// HTMLSelectElementに関する項目の検証
 		//
 		if (element instanceof ctx.window.HTMLSelectElement) {
-			setReferenceToEventListenerObserver('change', props, ['value', 'selectedOptions']);
+			setReferenceToEventListenerObserver(element, 'change', props, ['value', 'selectedOptions']);
 		}
 
 		//
 		// HTMLTextAreaElementに関する項目の検証
 		//
 		if (element instanceof ctx.window.HTMLTextAreaElement) {
-			setReferenceToEventListenerObserver('input', props, ['value']);
+			setReferenceToEventListenerObserver(element, 'input', props, ['value']);
 		}
 	}
 }
