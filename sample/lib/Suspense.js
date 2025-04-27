@@ -1,4 +1,4 @@
-import { StateNode, StatePlaceholderNode, StateNodeSet, GenStateNode, GenStateNodeSet, Context, ILocalSuspenseContext, SuspenseContext, normalizeCtxProps } from "../../src/core.js";
+import { StateNode, StatePlaceholderNode, StateNodeSet, GenStateNode, GenStateNodeSet, Context, ILocalSuspenseContext, SuspenseContext, normalizeCtxProps, GenStatePlaceholderNode } from "../../src/core.js";
 
 /**
  * @template T
@@ -445,7 +445,8 @@ class GenSuspenseStateNodeSet extends GenStateNodeSet {
 	 * @param { [GenStateNode] } nestedNodeSet
 	 */
 	constructor(props, nestedNodeSet) {
-		super(nestedNodeSet);
+		// 要素が存在しないときはplaceholderを設置
+		super(nestedNodeSet.length === 0 ? [new GenStatePlaceholderNode()] : nestedNodeSet);
 		this.#props = props;
 	}
 

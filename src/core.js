@@ -14,11 +14,13 @@ class ICallerLabel {
 	 * 状態の更新の蓄積を行う
 	 * @param { CallerType['caller'] } caller 状態の参照先
 	 */
+	/* istanbul ignore next */
 	update(caller) { throw new Error('not implemented.'); }
 
 	/**
 	 * 蓄積した更新を処理する
 	 */
+	/* istanbul ignore next */
 	proc() { throw new Error('not implemented.'); }
 }
 
@@ -158,6 +160,7 @@ class IState {
 	/**
 	 * @returns { T }
 	 */
+	/* istanbul ignore next */
 	get value() { throw new Error('not implemented.'); }
 
 	/**
@@ -166,6 +169,7 @@ class IState {
 	 * @param { CallerType['label'] } label 更新の振る舞いを決めるラベル
 	 * @returns { { state: IState<T>; caller?: { caller: CallerType; states: State<unknown>[] }} } 呼び出し元情報
 	 */
+	/* istanbul ignore next */
 	unidirectional(ctx, label = undefined) { throw new Error('not implemented.'); }
 
 	/**
@@ -174,6 +178,7 @@ class IState {
 	 * @param { CallerType['label'] } label 更新の振る舞いを決めるラベル
 	 * @returns { { state: IState<T>; caller?: { caller: CallerType; states: State<unknown>[] }} } 呼び出し元情報
 	 */
+	/* istanbul ignore next */
 	observe(ctx, label = undefined) { throw new Error('not implemented.'); }
 
 	/**
@@ -387,16 +392,16 @@ class State extends IState {
 			 * @param { State<T> } s
 			 */
 			const c = s => {
-					s.#onreference = true;
-					caller.states.forEach(state => {
-						if (state.#onreference instanceof Function) {
-							state.#onreference(state);
-						}
+				s.#onreference = true;
+				caller.states.forEach(state => {
+					if (state.#onreference instanceof Function) {
+						state.#onreference(state);
+					}
 					else {
 						state.#onreference = true;
 					}
-					});
-				};
+				});
+			};
 
 			if (this.utilized) {
 				// 既にthisが参照されているならば即時でcを呼び出す
@@ -640,16 +645,19 @@ class StateNode {
 	 * DOMノードの取得
 	 * @returns { HTMLElement | Text | undefined }
 	 */
+	/* istanbul ignore next */
 	get element() { throw new Error('not implemented.'); }
 
 	/**
 	 * ノードの削除
 	 */
+	/* istanbul ignore next */
 	remove() { throw new Error('not implemented.'); }
 
 	/**
 	 * ノードの取り外し
 	 */
+	/* istanbul ignore next */
 	detach() { throw new Error('not implemented.'); }
 
 	/**
@@ -2320,6 +2328,7 @@ class ILocalSuspenseContext {
 	 * @param { () => Promise<unknown> } callback キャプチャする非同期関数
 	 * @param { boolean } cancellable キャンセル可能かの設定
 	 */
+	/* istanbul ignore next */
 	async capture(ctx, callback, cancellable) { throw new Error('not implemented.'); }
 }
 
@@ -2384,8 +2393,6 @@ class SuspenseContext {
 class StateContext {
 	/** @type { { caller: CallerType; states: State<unknown>[] }[] } 状態変数とその呼び出し元を記録するスタック */
 	#stack = [];
-	/** @type { Map<CallerType['label'], CallerType['caller'][]>[] } 遅延評価対象の呼び出し元の集合についてのスタック */
-	#lazyUpdateStack = [];
 	/** @type { Map<Exclude<CallerType['label'], undefined>, Set<CallerType['caller']> | undefined> } 遅延評価対象の呼び出し元の集合 */
 	#lockCaller = new Map();
 	/** @type { boolean } onreferenceを発火するかのフラグ */
@@ -2412,21 +2419,7 @@ class StateContext {
 	 * @param { Iterable<CallerType> } itr 状態の参照先のハンドラ
 	 */
 	update(itr) {
-		// 状態の遅延評価を行う場合は遅延評価を行う対象の集合に記憶する
-		if (this.#lazyUpdateStack.length > 0) {
-			const map = this.#lazyUpdateStack[this.#lazyUpdateStack.length - 1];
-			for (const val of itr) {
-				let list = map.get(val.label);
-				if (!list) {
-					list = [];
-					map.set(val.label, list);
-				}
-				list.push(val.caller);
-			}
-			return;
-		}
-
-		for (const val of itr) {
+		for (const val of [...itr]) {
 			const label = val.label;
 			if (label) {
 				if (this.#lockCaller.has(label)) {
@@ -2455,18 +2448,6 @@ class StateContext {
 	 * @param { CallerType['label'] } label 更新の振る舞いを決めるラベル
 	 */
 	update2(itr, label) {
-		// 状態の遅延評価を行う場合は遅延評価を行う対象の集合に記憶する
-		if (this.#lazyUpdateStack.length > 0) {
-			const map = this.#lazyUpdateStack[this.#lazyUpdateStack.length - 1];
-			let list = map.get(label);
-			if (!list) {
-				list = [];
-				map.set(label, list);
-			}
-			list.push(...itr);
-			return;
-		}
-
 		if (label) {
 			if (this.#lockCaller.has(label)) {
 				// lockされているときは蓄積する
@@ -2480,37 +2461,16 @@ class StateContext {
 				}
 			}
 			else {
-				for (const val of itr) {
+				for (const val of [...itr]) {
 					label.update(val);
 				}
 			}
 		}
 		else {
 			// ラベルが未定義の場合は同期的に即時評価
-			for (const val of itr) {
+			for (const val of [...itr]) {
 				val();
 			}
-		}
-	}
-
-	/**
-	 * callback内での状態変数の変更の伝播を遅延させるハンドラを生成する
-	 * @template R
-	 * @param { () => R } callback 状態変数の変更操作を含む関数
-	 * @returns { { ret: R; caller: Map<CallerType['label'], CallerType['caller'][]> } } 状態変数の変更の伝播を行う関数
-	 */
-	lazy(callback) {
-		/** @type { Map<CallerType['label'], CallerType['caller'][]> } */
-		const map = new Map();
-		this.#lazyUpdateStack.push(map);
-		try {
-			const ret = callback();
-			this.#lazyUpdateStack.pop();
-			return { ret, caller: map };
-		}
-		catch (e) {
-			this.#lazyUpdateStack.pop();
-			throw e;
 		}
 	}
 
