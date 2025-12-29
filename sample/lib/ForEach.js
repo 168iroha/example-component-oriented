@@ -207,19 +207,17 @@ class VariableStateNodeSet extends StateNodeSet {
 		const nodeSetList = [];
 		const cancellable = this.#props.cancellable.value ?? true;
 		const promiseList = [];
-		// 残存するノードの並べ替え
-		for (const { set, switching } of this.#keyList.values()) {
+		// 表示するノードの設定
+		for (const { set, switching, index } of this.#keyList.values()) {
 			if (switching.node) {
+				// 残存するノードの並べ替え
 				afterElement = set.insertBefore(afterElement, parent);
 				nodeSetList.push(set);
 			}
-		}
-		// ノードの新規挿入
-		for (const { set, switching, index } of this.#keyList.values()) {
-			if (!switching.node) {
-				/** @type { HTMLElement | Text | undefined } */
-				const _afterElement = index >= nodeSetList.length ? afterElement : nodeSetList[index].first.element;
-				promiseList.push(switching.insertBefore(set, _afterElement, parent, cancellable));
+			else {
+				// ノードの新規挿入
+				// SwitchingPage.insertBeforeの第一引数は非同期な評価により挿入が遅延される場合があるがStateNodeSetを指定するためafterElementの直前への挿入の指定は問題ない
+				promiseList.push(switching.insertBefore(set, afterElement, parent, cancellable));
 				nodeSetList.push(set);
 			}
 		}
