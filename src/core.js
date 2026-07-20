@@ -925,6 +925,10 @@ class GenStateNode {
 							// テキストノードもしくはplaceholderであれば挿入して補完する
 							if (useChildNodes) {
 								element.insertBefore(genElement, childNode);
+								// 末尾への挿入時はchildNodesが1つ伸びるためcntを追従させて整合させる
+								if (!childNode) {
+									++cnt;
+								}
 							}
 						}
 						else {
@@ -939,7 +943,7 @@ class GenStateNode {
 					}
 				}
 				// 子要素が多すぎたかの評価
-				if (useChildNodes && cnt + 1 < childNodes.length) {
+				if (useChildNodes && cnt < childNodes.length) {
 					throw new Error('The number of nodes is excessive.');
 				}
 			}
@@ -996,7 +1000,7 @@ class GenStateNode {
 				lockedLabelSet.delete(ctx.sideEffectLabel);
 			}
 		}
-		return { labelSet: lockedLabelSet, node: resuleNode, element: ret.element };
+		return { labelSet: lockedLabelSet, node: resultNode, element: ret.element };
 	}
 
 	/**
