@@ -21,10 +21,6 @@ import { StateNode, StatePlaceholderNode, StateNodeSet, GenStateNode, GenStateNo
  */
 
 /**
- * @typedef { import("../../src/async.js").SuspendGroupCallbackType } SuspendGroupCallbackType SuspendGroupでキャプチャするコールバックの型
- */
-
-/**
  * @typedef { () => Promise<unknown> | undefined | Generator<Promise<unknown> | undefined, Promise<unknown> | undefined> } SuspendGroupCallbackType SuspendGroupでキャプチャするコールバックの型
  */
 

@@ -708,7 +708,7 @@ class GenStateNode {
 	}
 
 	/**
-	 * 別物のStateNodeを生成しても問題のないGetStateNodeを生成
+	 * 別物のStateNodeを生成しても問題のないGenStateNodeを生成
 	 * @returns { GenStateNode }
 	 */
 	clone() { throw new Error('not implemented.'); }
@@ -772,7 +772,7 @@ class GenStateNode {
 
 	/**
 	 * @overload
-	 * @param { Context } ctx コンポーネントを構築するコンテキス
+	 * @param { Context } ctx コンポーネントを構築するコンテキスト
 	 * @param { GenStateNode } gen コンポーネントを生成する対象
 	 * @param { HTMLElement | undefined } element マウントに用いるDOMノード
 	 * @param { Set<ICallerLabel> } lockedLabelSet 現在のbuildでロックをかけたラベルのリスト
@@ -781,7 +781,7 @@ class GenStateNode {
 	 */
 	/**
 	 * @overload
-	 * @param { Context } ctx コンポーネントを構築するコンテキス
+	 * @param { Context } ctx コンポーネントを構築するコンテキスト
 	 * @param { GenStateNode } gen コンポーネントを生成する対象
 	 * @param { HTMLElement | undefined } element マウントに用いるDOMノード
 	 * @param { Set<ICallerLabel> } lockedLabelSet 現在のbuildでロックをかけたラベルのリスト
@@ -790,7 +790,7 @@ class GenStateNode {
 	 */
 	/**
 	 * コンポーネントに対してマウントを試みる
-	 * @param { Context } ctx コンポーネントを構築するコンテキス
+	 * @param { Context } ctx コンポーネントを構築するコンテキスト
 	 * @param { GenStateNode } gen コンポーネントを生成する対象
 	 * @param { HTMLElement | undefined } element マウントに用いるDOMノード
 	 * @param { Set<ICallerLabel> } lockedLabelSet 現在のbuildでロックをかけたラベルのリスト
@@ -801,7 +801,7 @@ class GenStateNode {
 		/** @type { StateComponent | undefined } */
 		let prevNode = undefined;
 		/** @type { StateComponent[] } */
-		const comonentList = [];
+		const componentList = [];
 		while (gen instanceof GenStateComponent) {
 			if (waitFlag === 'wait' && gen instanceof GenStateAsyncComponent) {
 				// waitかつ非同期コンポーネントの場合は評価しない(副作用ではないことにより構築されるのを防止)
@@ -811,7 +811,7 @@ class GenStateNode {
 			const { node, children } = yield gen.buildCurrent(ctx, element, waitFlag);
 			lockedLabelSet.add(node.ctx.sideEffectLabel);
 			if ((prevNode instanceof StateComponent) && !(prevNode instanceof StateAsyncComponent)) {
-				comonentList.push(prevNode);
+				componentList.push(prevNode);
 				const prevCtx = prevNode.ctx;
 				if (!prevCtx.hasFunctionDelivery && prevCtx.state.lockedCount(prevCtx.sideEffectLabel) === 0) {
 					// 副作用はないためロックを解除
@@ -827,7 +827,7 @@ class GenStateNode {
 		// elementが与えられたならばこのタイミングでマウントされる
 		const ret = yield gen.buildCurrent(ctx, element, waitFlag);
 		// コンポーネントを示すDOMノードが構築された段階でonMountを発火
-		comonentList.forEach(node => node.onMount());
+		componentList.forEach(node => node.onMount());
 		return { ctx, ...ret };
 	}
 
@@ -854,8 +854,8 @@ class GenStateNode {
 	 */
 	*#mountImpl(ctx, target, waitFlag) {
 		/** @type { undefined | StateNode } */
-		let resuleNode = undefined;
-		this.getStateNode(node => resuleNode = node);
+		let resultNode = undefined;
+		this.getStateNode(node => resultNode = node);
 		/** @type { Set<ICallerLabel> } */
 		const lockedLabelSet = new Set();
 
@@ -1196,7 +1196,7 @@ class GenStateNodeSet {
 	 * @param { (GenStateNode | GenStateNodeSet)[] } nestedNodeSet ネストを許容したノードの集合
 	 */
 	constructor(nestedNodeSet) {
-		this.nestedNodeSet= nestedNodeSet;
+		this.nestedNodeSet = nestedNodeSet;
 	}
 
 	/**
@@ -1310,7 +1310,7 @@ class GenStateTextNode extends GenStateNode {
 	}
 
 	/**
-	 * 別物のStateNodeを生成しても問題のないGetStateNodeを生成
+	 * 別物のStateNodeを生成しても問題のないGenStateNodeを生成
 	 * @returns { GenStateTextNode }
 	 */
 	clone() {
@@ -1396,7 +1396,7 @@ class GenStatePlaceholderNode extends GenStateNode {
 	}
 
 	/**
-	 * 別物のStateNodeを生成しても問題のないGetStateNodeを生成
+	 * 別物のStateNodeを生成しても問題のないGenStateNodeを生成
 	 * @returns { GenStatePlaceholderNode }
 	 */
 	clone() {
@@ -1473,7 +1473,7 @@ class GenStateHTMLElement extends GenStateNode {
 	}
 
 	/**
-	 * 別物のStateNodeを生成しても問題のないGetStateNodeを生成
+	 * 別物のStateNodeを生成しても問題のないGenStateNodeを生成
 	 * @returns { GenStateHTMLElement }
 	 */
 	clone() {
@@ -1558,7 +1558,7 @@ class StateDomNode extends StateNode {
  * 状態の伝播に関する参照情報の設定
  * @template { string } K
  * @param { ObservableStates<K> } props 観測する対象
- * @param { string } targets 監視対象のパラメータ
+ * @param { string[] } targets 監視対象のパラメータ
  * @param { (key: string) => (state: State<unknown>) => void } callback onreferenceに設定するコールバック
  */
 function setReference(props, targets, callback) {
@@ -1655,7 +1655,7 @@ class GenStateDomNode extends GenStateNode {
 	}
 
 	/**
-	 * 別物のStateNodeを生成しても問題のないGetStateNodeを生成
+	 * 別物のStateNodeを生成しても問題のないGenStateNodeを生成
 	 * @returns { GenStateDomNode<K> }
 	 */
 	clone() {
@@ -1785,7 +1785,7 @@ class GenStateDomNode extends GenStateNode {
 		// 子要素の構築
 		/** @type { { node: GenStateNode; ctx: Context }[] } */
 		const children = [];
-		for (const child of  this.#children) {
+		for (const child of this.#children) {
 			if (child instanceof GenStateNode) {
 				children.push({ node: child, ctx });
 			}
@@ -1830,7 +1830,7 @@ class GenStateDomNode extends GenStateNode {
 			setReferenceToObserver(element, setter => {
 				const resizeObserver = new ResizeObserver(entries => setter(element));
 				resizeObserver.observe(element);
-			}, props, ['clientHeigth', 'clientWidth']);
+			}, props, ['clientHeight', 'clientWidth']);
 		}
 
 		//
@@ -2034,7 +2034,7 @@ class GenStateComponent extends GenStateNode {
 	}
 
 	/**
-	 * 別物のStateNodeを生成しても問題のないGetStateNodeを生成
+	 * 別物のStateNodeを生成しても問題のないGenStateNodeを生成
 	 * @returns { GenStateComponent<K> }
 	 */
 	clone() {
@@ -2196,7 +2196,7 @@ class GenStateAsyncComponent extends GenStateComponent {
 	}
 
 	/**
-	 * 別物のStateNodeを生成しても問題のないGetStateNodeを生成
+	 * 別物のStateNodeを生成しても問題のないGenStateNodeを生成
 	 * @returns { GenStateAsyncComponent<K> }
 	 */
 	clone() {
@@ -2669,7 +2669,7 @@ class Context {
 	 * コンストラクタ
 	 * @param { typeof window } window ウィンドウインターフェース
 	 * @param { DomUpdateController | undefined } domUpdateController DOMの更新のためのコントローラ
-	 * @param { StateContext | undefined } stateCtx Suspenseのコンテキスト
+	 * @param { StateContext | undefined } stateCtx Stateのコンテキスト
 	 * @param { SuspenseContext | undefined } suspenseCtx Suspenseのコンテキスト
 	 */
 	constructor(window, domUpdateController = undefined, stateCtx = undefined, suspenseCtx = undefined) {
