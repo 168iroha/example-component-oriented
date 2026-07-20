@@ -1,9 +1,6 @@
 {
-  "devDependencies": {
-    "webpack": "^5.89.0",
-    "webpack-cli": "^5.1.4"
-  },
+  "type": "module",
   "dependencies": {
-    "jsdom": "^23.0.1"
+    "jsdom": "^29.1.1"
   }
 }
