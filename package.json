@@ -9,8 +9,8 @@
   },
   "author": "",
   "license": "ISC",
-  "devDependencies": {
-    "jest": "^29.7.0",
-    "jest-environment-jsdom": "^29.7.0"
+  "dependencies": {
+    "jest": "^30.4.2",
+    "jest-environment-jsdom": "^30.4.1"
   }
 }
