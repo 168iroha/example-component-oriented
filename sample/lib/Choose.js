@@ -1,9 +1,17 @@
-import { State, StateNode, StateNodeSet, GenStateNode, GenStateNodeSet, GenStatePlaceholderNode, Context, watch, StateAsyncComponent, normalizeCtxChild, normalizeCtxProps } from "../../src/core.js";
+import { State, Computed, StateNode, StateNodeSet, GenStateNode, GenStateNodeSet, GenStatePlaceholderNode, Context, watch, StateAsyncComponent, normalizeCtxChild, normalizeCtxProps } from "../../src/core.js";
 import { SwitchingPage, SuspendGroup, LocalSuspenseContextForCapture } from "./Suspense.js";
+
+/**
+ * @typedef { import("../../src/core.js").CallerType } CallerType 状態変数における呼び出し元についての型
+ */
 
 /**
  * @template T
  * @typedef { import("../../src/core.js").CompPropTypes<T> } CompPropTypes コンポーネント上でのプロパティの型
+ */
+
+/**
+ * @typedef { import("../../src/core.js").AsyncComponentType } AsyncComponentType 非同期コンポーネントの型
  */
 
 /**
@@ -12,21 +20,25 @@ import { SwitchingPage, SuspendGroup, LocalSuspenseContextForCapture } from "./S
  */
 
 /**
- * StateNodeSetを選択するノード
  * @template T
+ * @typedef { import("../../src/core.js").CtxValueType<T> } CtxValueType コンテキスト上での値の型
+ */
+
+/**
+ * StateNodeSetを選択するノード
  */
 class ShowStateNodeSet extends StateNodeSet {
 	/** @type { StateNodeSet | undefined } 表示対象についてのキャッシュ */
 	#cache = undefined;
-	/** @type { { caller: CallerType; states: State<unknown>[] }[] } 呼び出し元のリスト(これの破棄により親との関連付けが破棄される) */
+	/** @type { { caller: CallerType; states: (State<unknown> | Computed<unknown>)[] }[] } 呼び出し元のリスト(これの破棄により親との関連付けが破棄される) */
 	callerList = [];
 
 	/**
 	 * コンストラクタ
 	 * @param { Context } ctx 状態変数を扱っているコンテキスト
 	 * @param { { node: GenStateNode; ctx: Context }[] } sibling 構築結果の兄弟要素を格納する配列
-	 * @param { CompPropTypes<typeof When<T>> } props 
-	 * @param { (v: T) => (GenStateNode | GenStateNodeSet)[] } gen
+	 * @param { CompPropTypes<typeof When> } props 
+	 * @param { (v: unknown | undefined) => (GenStateNode | GenStateNodeSet | CtxValueType<string>)[] } gen
 	 */
 	constructor(ctx, sibling, props, gen) {
 		super(ctx, [], sibling);
@@ -34,7 +46,7 @@ class ShowStateNodeSet extends StateNodeSet {
 		const switchingPage = new SwitchingPage(suspendGroup);
 
 		// 表示対象の更新時にその捕捉を行う
-		const caller = watch(ctx, props.target, (prev, next) => {
+		const watchCaller = watch(ctx, props.target, (prev, next) => {
 			// DOMノードが構築されたことがあるかつ状態変数が有効な場合にのみ構築する
 			const element = this.first?.element;
 			if (element && next !== undefined) {
@@ -42,6 +54,7 @@ class ShowStateNodeSet extends StateNodeSet {
 				const flag = props.test.value === undefined || props.test.value(next);
 				// キャッシュヒットの検査
 				const cache = props.cache.value ?? false;
+				// キャッシュヒット時は構築済みのStateNodeSetとなる
 				const genStateNodeSet = (() => {
 					const set = cache ? this.#cache : undefined;
 					if (set) {
@@ -90,7 +103,7 @@ class ShowStateNodeSet extends StateNodeSet {
 				}
 				// 全てのページ生成の解決後にキャプチャした非同期処理の解決をする
 				if (props.fallthrough.value ?? false) {
-					promise = ctx.capture(callback, cancellable);
+					promise = ctx.capture(callback, props.cancellable.value ?? true);
 				}
 				else {
 					promise = callback();
@@ -104,8 +117,8 @@ class ShowStateNodeSet extends StateNodeSet {
 				});
 			}
 		});
-		if (caller) {
-			this.callerList.push(caller);
+		if (watchCaller) {
+			this.callerList.push({ caller: watchCaller, states: [props.target].filter(s => s instanceof State || s instanceof Computed) });
 		}
 		// 各種イベントのインスタンスの単方向関連付け
 		ctx.state.unidirectional(props.onAfterSwitching, x => switchingPage.afterSwitching = x);
@@ -125,14 +138,15 @@ class ShowStateNodeSet extends StateNodeSet {
 			}
 
 			ctx.state.update([{ caller: () => {
-				const parent = this.first.element.parentElement;
-				const afterElement = this.last.element.nextSibling;
+				const node = this.first;
+				const parent = node.element.parentElement;
+				const afterElement = /** @type { HTMLElement | Text | undefined } */ (this.last.element.nextSibling ?? undefined);
 				const set = this.nestedNodeSet[0];
-				const page = this.first instanceof StateAsyncComponent ? async () => { await this.first.finished; return set; } : set;
+				const page = node instanceof StateAsyncComponent ? async () => { await node.finished; return set; } : set;
 				switchingPage.afterSwitching = props.initSwitching.value ?? false ? switchingPage.afterSwitching : undefined;
 				// ノードの切り替え
 				if (props.fallthrough.value ?? false) {
-					ctx.capture(() => switchingPage.insertBefore(page, afterElement, parent, props.cancellable.value ?? true), cancellable);
+					ctx.capture(() => switchingPage.insertBefore(page, afterElement, parent, props.cancellable.value ?? true), props.cancellable.value ?? true);
 				}
 				else {
 					switchingPage.insertBefore(page, afterElement, parent, props.cancellable.value ?? true);
@@ -153,18 +167,17 @@ class ShowStateNodeSet extends StateNodeSet {
 
 /**
  * ShowStateNodeSetを生成するためのノードの集合
- * @template T
  */
 class GenShowStateNodeSet extends GenStateNodeSet {
-	/** @type { CompPropTypes<typeof When<T>> } プロパティ */
+	/** @type { CompPropTypes<typeof When> } プロパティ */
 	#props;
-	/** @type { (v: T) => (GenStateNode | GenStateNodeSet)[] } ノードを生成する関数 */
+	/** @type { (v: unknown | undefined) => (GenStateNode | GenStateNodeSet | CtxValueType<string>)[] } ノードを生成する関数 */
 	#gen;
 
 	/**
 	 * コンストラクタ
-	 * @param { CompPropTypes<typeof When<T>> } props 
-	 * @param { (v: T) => (GenStateNode | GenStateNodeSet)[] } gen
+	 * @param { CompPropTypes<typeof When> } props 
+	 * @param { (v: unknown | undefined) => (GenStateNode | GenStateNodeSet | CtxValueType<string>)[] } gen
 	 */
 	constructor(props, gen) {
 		super([]);
@@ -202,21 +215,17 @@ class GenShowStateNodeSet extends GenStateNodeSet {
 
 /**
  * ノードの選択における条件式を設定する擬似コンポーネント
- * @template T
- * @param { CtxPropTypes<typeof When<T>> } props 
- * @param { (v: T) => (GenStateNode | GenStateNodeSet)[] } children
- * @returns 
+ * @param { CtxPropTypes<typeof When> } props 
+ * @param { (v: unknown | undefined) => (GenStateNode | GenStateNodeSet | CtxValueType<string>)[] } children
+ * @returns  { GenShowStateNodeSet }
  */
 function When(props, children) {
 	return new GenShowStateNodeSet(normalizeCtxProps(When, props), children)
 }
-/**
- * @template T
- */
 When.propTypes = {
-	/** @type { T | undefined } 表示対象を切り替える基準となる変数 */
+	/** @type { unknown | undefined } 表示対象を切り替える基準となる変数 */
 	target: undefined,
-	/** @type { ((val: T) => boolean) | undefined } 表示判定を行うテスト関数 */
+	/** @type { ((val: unknown) => boolean) | undefined } 表示判定を行うテスト関数 */
 	test: undefined,
 	/** @type { ((node: StateNode) => Promise | undefined) | undefined } ノード削除前に実行されるイベント */
 	onBeforeSwitching: undefined,
@@ -236,24 +245,23 @@ When.early = true;
 
 /**
  * ShowStateNodeSetを選択するノード
- * @template T
  */
 class WhenStateNodeSet extends StateNodeSet {
 	/** @type { number } 前回選択した要素のインデックス */
 	#prevChooseIndex = -2;
-	/** @type { CompPropTypes<typeof Choose<T>> } プロパティ */
+	/** @type { CompPropTypes<typeof Choose> } プロパティ */
 	#props;
 	/** @type { (StateNodeSet | undefined)[] } 表示対象についてのキャッシュ */
 	#cacheTable = [];
-	/** @type { { caller: CallerType; states: State<unknown>[] }[] } 呼び出し元のリスト(これの破棄により親との関連付けが破棄される) */
+	/** @type { { caller: CallerType; states: (State<unknown> | Computed<unknown>)[] }[] } 呼び出し元のリスト(これの破棄により親との関連付けが破棄される) */
 	callerList = [];
 
 	/**
 	 * コンストラクタ
 	 * @param { Context } ctx 状態変数を扱っているコンテキスト
 	 * @param { { node: GenStateNode; ctx: Context }[] } sibling 構築結果の兄弟要素を格納する配列
-	 * @param { CompPropTypes<typeof Choose<T>> } props 
-	 * @param { GenShowStateNodeSet<T>[] } nestedNodeSet
+	 * @param { CompPropTypes<typeof Choose> } props 
+	 * @param { GenShowStateNodeSet[] } nestedNodeSet
 	 */
 	constructor(ctx, sibling, props, nestedNodeSet) {
 		super(ctx, [], sibling);
@@ -262,7 +270,7 @@ class WhenStateNodeSet extends StateNodeSet {
 		const switchingPage = new SwitchingPage(suspendGroup);
 
 		// 表示対象の更新時にその捕捉を行う
-		const caller = watch(ctx, this.#props.target, (prev, next) => {
+		const watchCaller = watch(ctx, this.#props.target, (prev, next) => {
 			// DOMノードが構築されたことがある場合にのみ構築する
 			const element = this.first?.element;
 			if (element) {
@@ -319,24 +327,26 @@ class WhenStateNodeSet extends StateNodeSet {
 				}
 			}
 		});
-		if (caller) {
-			this.callerList.push(caller);
+		if (watchCaller) {
+			this.callerList.push({ caller: watchCaller, states: [props.target].filter(s => s instanceof State || s instanceof Computed) });
 		}
 		// 各種イベントのインスタンスの単方向関連付け
 		ctx.state.unidirectional(props.onAfterSwitching, x => switchingPage.afterSwitching = x);
 		ctx.state.unidirectional(props.onBeforeSwitching, x => switchingPage.beforeSwitching = x);
 
 		/** @type { GenStateNodeSet } 初期表示の設定 */
-		const genStateNode = this.#chooseNode(ctx, props.target.value, nestedNodeSet, switchingPage);
+		// 初回選択のためキャッシュは存在せず必ずGenStateNodeSetとなる
+		const genStateNode = /** @type { GenStateNodeSet } */ (this.#chooseNode(ctx, props.target.value, nestedNodeSet, switchingPage));
 		const { set, sibling: sibling_ } = genStateNode.buildStateNodeSet(ctx);
 		this.nestedNodeSet = [set];
 		sibling.push(...sibling_);
 
 		ctx.state.update([{ caller: () => {
-			const parent = this.first.element.parentElement;
-			const afterElement = this.last.element.nextSibling;
+			const node = this.first;
+			const parent = node.element.parentElement;
+			const afterElement = /** @type { HTMLElement | Text | undefined } */ (this.last.element.nextSibling ?? undefined);
 			const set = this.nestedNodeSet[0];
-			const page = this.first instanceof StateAsyncComponent ? async () => { await this.first.finished; return set; } : set;
+			const page = node instanceof StateAsyncComponent ? async () => { await node.finished; return set; } : set;
 			const initSwitching = (this.#prevChooseIndex >= 0 ? nestedNodeSet[this.#prevChooseIndex].props.initSwitching.value : undefined) ?? props.initSwitching.value;
 			switchingPage.afterSwitching = initSwitching ? switchingPage.afterSwitching : undefined;
 			// ノードの切り替え
@@ -364,8 +374,8 @@ class WhenStateNodeSet extends StateNodeSet {
 	/**
 	 * nestedNodeSetからノードを選択する
 	 * @param { Context } ctx 状態変数を扱っているコンテキスト
-	 * @param { T } val 表示対象を切り替える基準となる変数
-	 * @param { GenShowStateNodeSet<T>[] } nestedNodeSet valからDOMノードを選択するオブジェクトの配列
+	 * @param { unknown | undefined } val 表示対象を切り替える基準となる変数
+	 * @param { GenShowStateNodeSet[] } nestedNodeSet valからDOMノードを選択するオブジェクトの配列
 	 * @param { SwitchingPage } switchingPage ノードの表示切替についてのインスタンス
 	 */
 	#chooseNode(ctx, val, nestedNodeSet, switchingPage) {
@@ -428,15 +438,14 @@ class WhenStateNodeSet extends StateNodeSet {
 
 /**
  * WhenStateNodeSetを生成するためのノードの集合
- * @template T
  */
 class GenWhenStateNodeSet extends GenStateNodeSet {
-	/** @type { CompPropTypes<typeof Choose<T>> } プロパティ */
+	/** @type { CompPropTypes<typeof Choose> } プロパティ */
 	#props;
 
 	/**
 	 * コンストラクタ
-	 * @param { CompPropTypes<typeof Choose<T>> } props 
+	 * @param { CompPropTypes<typeof Choose> } props 
 	 * @param { GenShowStateNodeSet[] } nestedNodeSet
 	 */
 	constructor(props, nestedNodeSet) {
@@ -448,31 +457,26 @@ class GenWhenStateNodeSet extends GenStateNodeSet {
 	 * 保持しているノードの取得と構築
 	 * @protected
 	 * @param { Context } ctx コンテキスト
-	 * @returns { { set: WhenStateNodeSet<T>; sibling: { node: GenStateNode; ctx: Context }[] } }
+	 * @returns { { set: WhenStateNodeSet; ctx: Context; sibling: { node: GenStateNode; ctx: Context }[] } }
 	 */
 	buildStateNodeSetImpl(ctx) {
-		/** @type { { node: GenStateNode; ctx: Context }[] } */
-		const sibling = [];
-		const set = new WhenStateNodeSet(ctx, sibling, this.#props, this.nestedNodeSet);
+		const sibling = /** @type { { node: GenStateNode; ctx: Context }[] } */([]);
+		const set = new WhenStateNodeSet(ctx, sibling, this.#props, /** @type { GenShowStateNodeSet[] } */ (this.nestedNodeSet));
 		return { set, ctx, sibling };
 	}
 }
 
 /**
  * ノードの選択を行う擬似コンポーネント
- * @template T
- * @param { CtxPropTypes<typeof Choose<T>> } props 
- * @param { GenShowStateNodeSet<T>[] } children
- * @returns 
+ * @param { CtxPropTypes<typeof Choose> } props 
+ * @param { GenShowStateNodeSet[] } children
+ * @returns { GenWhenStateNodeSet }
  */
 function Choose(props, children) {
 	return new GenWhenStateNodeSet(normalizeCtxProps(Choose, props), children)
 }
-/**
- * @template T
- */
 Choose.propTypes = {
-	/** @type { T } 表示対象を切り替える基準となる変数 */
+	/** @type { unknown | undefined } 表示対象を切り替える基準となる変数 */
 	target: undefined,
 	/** @type { ((node: StateNode) => Promise | undefined) | undefined } ノード削除前に実行されるイベント */
 	onBeforeSwitching: undefined,

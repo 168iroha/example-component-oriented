@@ -1,5 +1,9 @@
-import { State, StateNode, StateNodeSet, GenStateNode, GenStateNodeSet, GenStatePlaceholderNode, Context, watch, normalizeCtxChild, normalizeCtxProps } from "../../src/core.js";
+import { State, Computed, StateNode, StateNodeSet, GenStateNode, GenStateNodeSet, GenStatePlaceholderNode, Context, watch, normalizeCtxChild, normalizeCtxProps } from "../../src/core.js";
 import { SwitchingPage, SuspendGroup } from "./Suspense.js";
+
+/**
+ * @typedef { import("../../src/core.js").CallerType } CallerType 状態変数における呼び出し元についての型
+ */
 
 /**
  * @template T
@@ -9,6 +13,11 @@ import { SwitchingPage, SuspendGroup } from "./Suspense.js";
 /**
  * @template T
  * @typedef { import("../../src/core.js").CtxPropTypes<T> } CtxPropTypes コンテキスト上でのプロパティの型
+ */
+
+/**
+ * @template T
+ * @typedef { import("../../src/core.js").CtxValueType<T> } CtxValueType コンテキスト上での値の型
  */
 
 /**
@@ -22,33 +31,32 @@ import { SwitchingPage, SuspendGroup } from "./Suspense.js";
 
 /**
  * ノードを選択するノード
- * @template T
  */
 class VariableStateNodeSet extends StateNodeSet {
-	/** @type { CompPropTypes<typeof ForEach<T>> } プロパティ */
+	/** @type { CompPropTypes<typeof ForEach> } プロパティ */
 	#props;
 	/** @type { Map<unknown, KeyTypeOfVariableStateNodeSet> } 現在のノードの集合のキーのリスト */
 	#keyList = new Map();
-	/** @type { { caller: CallerType; states: State<unknown>[] }[] } 呼び出し元のリスト(これの破棄により親との関連付けが破棄される) */
+	/** @type { { caller: CallerType; states: (State<unknown> | Computed<unknown>)[] }[] } 呼び出し元のリスト(これの破棄により親との関連付けが破棄される) */
 	callerList = [];
 
 	/**
 	 * コンストラクタ
 	 * @param { Context } ctx 状態変数を扱っているコンテキスト
 	 * @param { { node: GenStateNode; ctx: Context }[] } sibling 構築結果の兄弟要素を格納する配列
-	 * @param { CompPropTypes<typeof ForEach<T>> } props 
-	 * @param { (v: T, key?: unknown, genkey?: (typeof ForEach['propTypes']['key'])) => (GenStateNode | GenStateNodeSet)[] } gen
+	 * @param { CompPropTypes<typeof ForEach> } props 
+	 * @param { (v: unknown, key?: unknown, genkey?: (typeof ForEach['propTypes']['key'])) => (GenStateNode | GenStateNodeSet | CtxValueType<string>)[] } gen
 	 */
 	constructor(ctx, sibling, props, gen) {
 		super(ctx, [], sibling);
 		this.#props = props;
 
 		// 表示対象の更新時にその捕捉を行う
-		const caller = watch(ctx, props.target, (prev, next) => {
+		const watchCaller = watch(ctx, props.target, (prev, next) => {
 			// DOMノードが構築されている場合にのみ構築する(this.first.element自体はplaceholderにより(外部から操作しない限り)存在が保証される)
 			const element = this.first?.element;
 			if (element && !(prev.length === 0 && next.length === 0)) {
-				/** @type { Map<unknown, { set: StateNodeSet, switching: SwitchingPage; index: number }> } 変更後のノードの集合のキーのリスト */
+				/** @type { Map<unknown, KeyTypeOfVariableStateNodeSet> } 変更後のノードの集合のキーのリスト */
 				const keyList = new Map();
 
 				if (element.parentElement) {
@@ -104,8 +112,8 @@ class VariableStateNodeSet extends StateNodeSet {
 				}
 				const deleteNodeSet = [...this.#keyList.values()];
 				this.#keyList = keyList;
-				const prevNodeSetList = this.nestedNodeSet;
-				const endNode = this.last.element.nextSibling;
+				const prevNodeSetList = /** @type { StateNodeSet[] } */ (this.nestedNodeSet);
+				const endNode = /** @type { HTMLElement | Text | undefined } */ (this.last.element.nextSibling ?? undefined);
 				this.nestedNodeSet = nodeSetList;
 
 				// 親が有効ならばノードの付け替えを実施する
@@ -117,7 +125,7 @@ class VariableStateNodeSet extends StateNodeSet {
 						const elementList = [];
 						for (const nodeSet of prevNodeSetList) {
 							for (const node of nodeSet.nodeSet()) {
-								elementList.push(node.element);
+								elementList.push(/** @type { HTMLElement } */ (node.element));
 							}
 						}
 						// First
@@ -154,8 +162,8 @@ class VariableStateNodeSet extends StateNodeSet {
 				}
 			}
 		});
-		if (caller) {
-			this.callerList.push(caller);
+		if (watchCaller) {
+			this.callerList.push({ caller: watchCaller, states: [props.target].filter(s => s instanceof State || s instanceof Computed) });
 		}
 
 		// 初期状態の構築
@@ -187,7 +195,7 @@ class VariableStateNodeSet extends StateNodeSet {
 			const cancellable = props.cancellable.value;
 			for (const { set, switching } of this.#keyList.values()) {
 				const parent = set.first.element.parentElement;
-				const afterElement = set.last.element.nextSibling;
+				const afterElement = /** @type { HTMLElement | Text | undefined } */ (set.last.element.nextSibling ?? undefined);
 				switching.afterSwitching = props.initSwitching.value ? switching.afterSwitching : undefined;
 				switching.insertBefore(set, afterElement, parent, cancellable);
 				switching.afterSwitching = props.onAfterSwitching.value;
@@ -198,7 +206,7 @@ class VariableStateNodeSet extends StateNodeSet {
 	/**
 	 * ノードリストのセットアップを行う
 	 * @param { HTMLElement | Text } afterElement 前回のノードリストにおける一番最初のノード(parentは存在する前提とする)
-	 * @param { Node | undefined } endNode 前回のノードリストにおける一番最後のノードの次のノード
+	 * @param { HTMLElement | Text | undefined } endNode 前回のノードリストにおける一番最後のノードの次のノード
 	 * @param { Iterable<KeyTypeOfVariableStateNodeSet> } deleteNodeSet 削除対象のノード
 	 */
 	#setupNodeList(afterElement, endNode, deleteNodeSet) {
@@ -234,7 +242,7 @@ class VariableStateNodeSet extends StateNodeSet {
 		}
 		// 要素が存在しないときはplaceholderを設置
 		if (nodeSetList.length === 0) {
-			this.nestedNodeSet[0].insertBefore(endNode, parent);
+			(/** @type { StateNodeSet } */ (this.nestedNodeSet[0])).insertBefore(endNode, parent);
 		}
 		return promiseList;
 	}
@@ -250,18 +258,17 @@ class VariableStateNodeSet extends StateNodeSet {
 
 /**
  * VariableStateNodeSetを生成するためのノードの集合
- * @template T
  */
 class GenVariableStateNodeSet extends GenStateNodeSet {
-	/** @type { CompPropTypes<typeof ForEach<T>> } プロパティ */
+	/** @type { CompPropTypes<typeof ForEach> } プロパティ */
 	#props;
-	/** @type { (v: T, key?: unknown, genkey?: (typeof ForEach['propTypes']['key'])) => (GenStateNode | GenStateNodeSet)[] } ノードを生成する関数 */
+	/** @type { (v: unknown, key?: unknown, genkey?: (typeof ForEach['propTypes']['key'])) => (GenStateNode | GenStateNodeSet | CtxValueType<string>)[] } ノードを生成する関数 */
 	#gen;
 
 	/**
 	 * コンストラクタ
-	 * @param { CompPropTypes<typeof ForEach<T>> } props 
-	 * @param { (v: T, key?: unknown, genkey?: (typeof ForEach['propTypes']['key'])) => (GenStateNode | GenStateNodeSet)[] } gen
+	 * @param { CompPropTypes<typeof ForEach> } props 
+	 * @param { (v: unknown, key?: unknown, genkey?: (typeof ForEach['propTypes']['key'])) => (GenStateNode | GenStateNodeSet | CtxValueType<string>)[] } gen
 	 */
 	constructor(props, gen) {
 		super([]);
@@ -273,11 +280,10 @@ class GenVariableStateNodeSet extends GenStateNodeSet {
 	 * 保持しているノードの取得と構築
 	 * @protected
 	 * @param { Context } ctx コンテキスト
-	 * @returns { { set: VariableStateNodeSet; sibling: { node: GenStateNode; ctx: Context }[] } }
+	 * @returns { { set: VariableStateNodeSet; ctx: Context; sibling: { node: GenStateNode; ctx: Context }[] } }
 	 */
 	buildStateNodeSetImpl(ctx) {
-		/** @type { { node: GenStateNode; ctx: Context }[] } */
-		const sibling = [];
+		const sibling = /** @type { { node: GenStateNode; ctx: Context }[] } */([]);
 		const set = new VariableStateNodeSet(ctx, sibling, this.#props, this.#gen);
 		return { set, ctx, sibling };
 	}
@@ -285,21 +291,17 @@ class GenVariableStateNodeSet extends GenStateNodeSet {
 
 /**
  * 可変なノードを扱う擬似コンポーネント
- * @template T
- * @param { CtxPropTypes<typeof ForEach<T>> } props 
- * @param { (v: T, key?: unknown, genkey?: (typeof ForEach['propTypes']['key'])) => (GenStateNode | GenStateNodeSet)[] } children
- * @returns 
+ * @param { CtxPropTypes<typeof ForEach> } props 
+ * @param { (v: unknown, key?: unknown, genkey?: (typeof ForEach['propTypes']['key'])) => (GenStateNode | GenStateNodeSet | CtxValueType<string>)[] } children
+ * @returns { GenVariableStateNodeSet }
  */
 function ForEach(props, children) {
 	return new GenVariableStateNodeSet(normalizeCtxProps(ForEach, props), children);
 }
-/**
- * @template T
- */
 ForEach.propTypes = {
-	/** @type { T[] } 表示対象を切り替える基準となる変数 */
+	/** @type { unknown[] } 表示対象を切り替える基準となる変数 */
 	target: [],
-	/** @type { ((val: T) => unknown) | undefined } 表示対象を切り替える基準となる変数(undefinedの場合はtargetのindexに相当) */
+	/** @type { ((val: unknown) => unknown) | undefined } 表示対象を切り替える基準となる変数(undefinedの場合はtargetのindexに相当) */
 	key: undefined,
 	/** @type { ((node: StateNode) => Promise | undefined) | undefined } ノード削除前に実行されるイベント */
 	onBeforeSwitching: undefined,

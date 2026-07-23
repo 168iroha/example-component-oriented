@@ -1,16 +1,19 @@
 {
-  "name": "router",
-  "version": "1.0.0",
-  "description": "コンポーネント指向の実装例",
-  "main": "index.js",
-  "type": "module",
-  "scripts": {
-    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js"
-  },
-  "author": "",
-  "license": "ISC",
-  "dependencies": {
-    "jest": "^30.4.2",
-    "jest-environment-jsdom": "^30.4.1"
-  }
+	"name": "router",
+	"version": "1.0.0",
+	"description": "コンポーネント指向の実装例",
+	"main": "index.js",
+	"type": "module",
+	"scripts": {
+		"test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+		"test:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js --coverage",
+		"typecheck": "tsc -p jsconfig.json"
+	},
+	"author": "",
+	"license": "ISC",
+	"devDependencies": {
+		"jest": "^30.4.2",
+		"jest-environment-jsdom": "^30.4.1",
+		"typescript": "^7.0.2"
+	}
 }
