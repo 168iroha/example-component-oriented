@@ -13,7 +13,7 @@ const onMountLabel = new CommonLabel();
  * @param { (json: T) => R } transform jsonを状態変数として持つオブジェクトに変換をする関数
  * @returns { IState<R | undefined> }
  */
-function useSSRData(ctx, watchState, callback, init, transform = x => x) {
+function useSSRData(ctx, watchState, callback, init, transform = /** @type { (json: T) => R } */ (/** @type { unknown } */ (x => x))) {
 	const element = ctx.component?.element;
 
 	const className = '__USE_SSR_DATA__';
@@ -25,7 +25,7 @@ function useSSRData(ctx, watchState, callback, init, transform = x => x) {
 		const setState = state => () => callback().then(json => state.value = transform(json));
 		// 既に構築済みのノードに対して操作が行われる場合はデータの取り出しを試みる
 		if (element?.nodeType === ctx.window.Node.ELEMENT_NODE) {
-			const jsonElement = element.querySelector(`:scope > .${className}[type="${type}"]`);
+			const jsonElement = (/** @type { HTMLElement } */ (element)).querySelector(`:scope > .${className}[type="${type}"]`);
 			if (jsonElement) {
 				// ノードを取り出すことができたならばデータを取得してノードを除去する
 				/** @type { T } */

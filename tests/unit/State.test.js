@@ -1,5 +1,5 @@
 /** @jest-environment jsdom */
-import { StateContext, State, watch, CommonLabel, Context, StateComponent, NotState } from "../../src/core.js";
+import { StateContext, State, watch, CommonLabel, Context, StateSyncComponent, NotState } from "../../src/core.js";
 import { describe, it, expect } from '@jest/globals';
 
 describe('State', () => {
@@ -285,7 +285,7 @@ describe('State', () => {
 						const seq = [];
 			
 						const ctx1 = new Context(window);
-						const ctx2 = ctx1.generateContextForComponent(ctx => new StateComponent(ctx));
+						const ctx2 = ctx1.generateContextForComponent(ctx => new StateSyncComponent(ctx));
 						const state = new State(ctx2.state, 0);
 		
 						// stateが変更されたときに呼びだされる関数を設定

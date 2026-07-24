@@ -11,32 +11,22 @@ import { StateNode, StatePlaceholderNode, StateNodeSet, GenStateNode, GenStateNo
  */
 
 /**
- * @template T
- * @typedef { import("../../src/core.js").ComponentType<T> } ComponentType コンポーネントの型
+ * @typedef { import("../../src/core.js").ComponentType } ComponentType コンポーネントの型
  */
 
 /**
- * @template T
- * @typedef { import("../../src/core.js").AsyncComponentType<T> } AsyncComponentType 非同期コンポーネントの型
+ * @typedef { () => (Promise<unknown> | undefined | Generator<Promise<unknown> | undefined, unknown, unknown>) } SuspendGroupCallbackType SuspendGroupでキャプチャするコールバックの型
  */
 
 /**
- * @typedef { import("../../src/async.js").SuspendGroupCallbackType } SuspendGroupCallbackType SuspendGroupでキャプチャするコールバックの型
- */
-
-/**
- * @typedef { () => Promise<unknown> | undefined | Generator<Promise<unknown> | undefined, Promise<unknown> | undefined> } SuspendGroupCallbackType SuspendGroupでキャプチャするコールバックの型
- */
-
-/**
- * @typedef { () => Generator<Promise<unknown> | undefined, Promise<unknown> | undefined> } SuspendGroupGeneratorFunctionType SuspendGroupでキャプチャするジェネレータ関数の型
+ * @typedef { () => Generator<Promise<unknown> | undefined, unknown, unknown> } SuspendGroupGeneratorFunctionType SuspendGroupでキャプチャするジェネレータ関数の型
  */
 
 /**
  * アニメーションの一時停止をグループ単位で実現するためのクラス
  */
 class SuspendGroup {
-	/** @type { [] | undefined } capture呼び出しの記憶 */
+	/** @type { unknown[] | undefined } capture呼び出しの記憶(配列インスタンスの同一性で多重呼び出しを判定する) */
 	#inst = [];
 
 	/**
@@ -199,7 +189,7 @@ class SwitchingPage {
 			}
 			// 要素を挿入する
 			this_.#enable = !(nextNode instanceof StatePlaceholderNode);
-			this_.node = nextNode;
+			this_.node = /** @type { StateNode | StateNodeSet } */ (nextNode);
 			if (this_.node instanceof StateNodeSet) {
 				this_.node.insertBefore(afterNode, parentNode);
 			}
@@ -266,7 +256,7 @@ class SwitchingPage {
 					yield promiseNextNode.then(v => nextNode = v);
 				}
 				this_.#enable = !(nextNode instanceof StatePlaceholderNode);
-				this_.node = nextNode;
+				this_.node = /** @type { StateNode | StateNodeSet } */ (nextNode);
 				return;
 			}
 			// 評価中のPromiseが存在すれば評価をしてから後続処理を実施
@@ -288,8 +278,8 @@ class SwitchingPage {
 			}
 			// 要素を付け替える
 			this_.#enable = !(nextNode instanceof StatePlaceholderNode);
-			/** @type { StateNode | StateNodeSet } */
-			const switchingNode = nextNode;
+			// Promiseは直前のyieldで解決済み
+			const switchingNode = /** @type { StateNode | StateNodeSet } */ (nextNode);
 			if (afterNode.parentElement) {
 				const parentNode = afterNode.parentElement;
 				if (switchingNode !== this_.node) {
@@ -328,9 +318,9 @@ class SwitchingPage {
 class LocalSuspenseContextForCapture {
 	/** @type { SuspendGroup } switchingPageのためのグループ */
 	#suspendGroup = new SuspendGroup();
-	/** @type { SuspendGroupCallbackType[] } キャプチャしたコールバックを受け取る関数 */
+	/** @type { Promise<void>[] } キャプチャしたコールバックの実行を示すPromiseのリスト */
 	#callbackList = [];
-	/** @type { ((v: unknown) => void)[] } キャプチャしたコールバックを受け取る関数 */
+	/** @type { ((v?: unknown) => void)[] } キャプチャしたコールバックの解決を通知する関数のリスト */
 	#resolveList = [];
 
 	/**
@@ -442,7 +432,7 @@ class GenSuspenseStateNodeSet extends GenStateNodeSet {
 	/**
 	 * コンストラクタ
 	 * @param { CompPropTypes<typeof Suspense> } props 
-	 * @param { [GenStateNode] } nestedNodeSet
+	 * @param { GenStateNode[] } nestedNodeSet
 	 */
 	constructor(props, nestedNodeSet) {
 		// 要素が存在しないときはplaceholderを設置
@@ -457,8 +447,7 @@ class GenSuspenseStateNodeSet extends GenStateNodeSet {
 	 * @returns { { set: StateNodeSet; ctx: Context; sibling: { node: GenStateNode; ctx: Context }[] } }
 	 */
 	buildStateNodeSetImpl(ctx) {
-		/** @type { { node: GenStateNode; ctx: Context }[] } */
-		const sibling = [];
+		const sibling = /** @type { { node: GenStateNode; ctx: Context }[] } */([]);
 
 		const suspendGroup = new LocalSuspenseContextOnStateNode();
 		const ctx2 = ctx.generateContextForSuspense(new SuspenseContext(suspendGroup));
@@ -471,7 +460,7 @@ class GenSuspenseStateNodeSet extends GenStateNodeSet {
 			}
 		}, ctx2.sideEffectLabel);
 
-		this.nestedNodeSet[0].getStateNode(node => suspendGroup.page = node);
+		(/** @type { GenStateNode } */ (this.nestedNodeSet[0])).getStateNode(node => suspendGroup.page = node);
 		const set = new StateNodeSet(ctx2, this.nestedNodeSet, sibling);
 		return { set, ctx: ctx2, sibling };
 	}
@@ -481,7 +470,7 @@ class GenSuspenseStateNodeSet extends GenStateNodeSet {
  * 非同期処理をキャッチして代替するノードを表示する擬似コンポーネント
  * @param { CtxPropTypes<typeof Suspense> } props 
  * @param { [GenStateNode] } children
- * @returns 
+ * @returns { GenSuspenseStateNodeSet }
  */
 function Suspense(props, children) {
 	return new GenSuspenseStateNodeSet(normalizeCtxProps(Suspense, props), children);
@@ -499,13 +488,13 @@ Suspense.early = true;
 
 /**
  * コンポーネントの遅延読み込みを行う
- * @template { ComponentType<K> } K
- * @param { () => Promise<K | AsyncComponentType<K>> } callback 関数によるコンポーネントを生成する関数
+ * @template { ComponentType } K
+ * @param { () => Promise<K> } callback 関数によるコンポーネントを生成する関数
  */
 function load(callback) {
-	/** @type { ReturnType<typeof callback> | undefined } callbackの評価結果 */
+	/** @type { Promise<K> | undefined } callbackの評価結果 */
 	let promise = undefined;
-	/** @type { K | AsyncComponentType<K> | undefined } promiseの解決結果 */
+	/** @type { K | undefined } promiseの解決結果 */
 	let inst = undefined;
 
 	return {
@@ -520,7 +509,7 @@ function load(callback) {
 			 */
 			return async (...args) => {
 				inst = inst ?? await (promise ?? (promise = callback()));
-				return inst(...args);
+				return /** @type { (...args: unknown[]) => unknown } */(inst)(...args);
 			}
 		}
 	};
