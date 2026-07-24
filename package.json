@@ -1,5 +1,5 @@
 {
-	"name": "router",
+	"name": "@168iroha/cmponent-oriented",
 	"version": "1.0.0",
 	"description": "コンポーネント指向の実装例",
 	"main": "index.js",
